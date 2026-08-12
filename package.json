@@ -31,7 +31,6 @@
     "start": "node dist/cdp-chat-mcp.js",
     "dev": "tsc --watch",
     "inspect": "npx @modelcontextprotocol/inspector node dist/cdp-chat-mcp.js",
-    "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

@@ -1,5 +1,4 @@
 node_modules/
-dist/
 cdp-chat-media/
 .env
 .env.*
