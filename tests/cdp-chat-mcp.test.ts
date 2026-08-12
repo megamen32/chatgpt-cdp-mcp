@@ -1,10 +1,16 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { chmod, mkdtemp, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { createCdpChatServer } from "../src/cdp-chat-mcp.js";
 import type { ChatRecord, CdpChatDriver, CdpChatPage, DownloadedMedia, MessageRecord, PageIdentity } from "../src/cdp-chat.js";
 
 const connections: Array<{ client: Client; server: { close(): Promise<void> } }> = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(connections.splice(0).map(async ({ client, server }) => {
@@ -75,5 +81,21 @@ describe("standalone MCP server", () => {
     const receipt = JSON.parse(String(created.content[0]?.type === "text" ? created.content[0].text : "{}")) as { chatRef?: string; fixture?: boolean };
     expect(receipt).toMatchObject({ fixture: true });
     expect(receipt.chatRef).toMatch(/^cdpchat:v1:chat:/);
+  });
+
+  it("starts when npm invokes the compiled CLI through a symlink", async () => {
+    const root = await mkdtemp(join(tmpdir(), "chatgpt-cdp-mcp-bin-"));
+    try {
+      const compiled = join(process.cwd(), "dist", "cdp-chat-mcp.js");
+      const bin = join(root, "chatgpt-cdp-mcp");
+      await chmod(compiled, 0o755);
+      await symlink(compiled, bin);
+      const result = await execFileAsync("timeout", ["2s", bin], {
+        env: { ...process.env, CDP_CHAT_DRIVER_MODULE: join(process.cwd(), "examples", "mock-driver.mjs") },
+      }).catch((error: NodeJS.ErrnoException & { stderr?: string }) => error);
+      expect(String(result.stderr ?? "")).toContain("MCP server running on stdio");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
   CdpChatClient,
@@ -134,7 +135,17 @@ export async function main(): Promise<void> {
   console.error("[cdp-website-chat] MCP server running on stdio");
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+/** npm invokes package bins through a symlink, so resolve the executable target. */
+function isEntrypoint(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  }
+}
+
+if (isEntrypoint()) {
   main().catch((error: unknown) => {
     console.error(`[cdp-website-chat] Fatal: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
