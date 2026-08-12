@@ -1,0 +1,69 @@
+{
+  "name": "chatgpt-cdp-mcp",
+  "version": "0.1.0",
+  "description": "Turn one authenticated ChatGPT browser page into a bounded MCP server.",
+  "type": "module",
+  "main": "dist/cdp-chat.js",
+  "types": "dist/cdp-chat.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/cdp-chat.d.ts",
+      "import": "./dist/cdp-chat.js"
+    },
+    "./server": {
+      "types": "./dist/cdp-chat-mcp.d.ts",
+      "import": "./dist/cdp-chat-mcp.js"
+    }
+  },
+  "bin": {
+    "chatgpt-cdp-mcp": "dist/cdp-chat-mcp.js"
+  },
+  "files": [
+    "dist",
+    "docs/assets/hero.png",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && vitest run --root . --config vitest.config.ts",
+    "start": "node dist/cdp-chat-mcp.js",
+    "dev": "tsc --watch",
+    "inspect": "npx @modelcontextprotocol/inspector node dist/cdp-chat-mcp.js",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "chatgpt",
+    "cdp",
+    "browser-automation",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/megamen32/chatgpt-cdp-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/megamen32/chatgpt-cdp-mcp/issues"
+  },
+  "homepage": "https://github.com/megamen32/chatgpt-cdp-mcp#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

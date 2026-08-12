@@ -1,0 +1,6 @@
+src/
+tests/
+examples/
+.github/
+docs/*.md
+!docs/assets/hero.png
