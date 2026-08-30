@@ -208,9 +208,9 @@ export declare class CdpChatClient {
     listChats(input: ListChatsInput): Promise<ListChatsResult>;
     /** Search page-visible titles and message text without opening another tab. */
     searchChat(input: SearchChatInput): Promise<SearchChatResult>;
-    /** Export only a fixture-bound chat with message and byte limits. */
+    /** Export a page-visible chat with message and byte limits. */
     exportChat(input: ExportChatInput): Promise<ExportChatResult>;
-    /** Send exactly one fixture message after consuming an exact one-shot gate. */
+    /** Send exactly one message to a page-visible chat after consuming an exact one-shot gate. */
     sendMessage(input: SendMessageInput): Promise<SendMessageResult>;
     /** Edit exactly one fixture message with an expected version or old-text guard. */
     editMessage(input: EditMessageInput): Promise<EditMessageResult>;

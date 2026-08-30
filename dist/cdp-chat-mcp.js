@@ -26,12 +26,12 @@ export function registerCdpChatTools(server, client) {
         query: z.string().trim().min(1).max(256),
         limit: z.number().int().min(1).max(100).optional(),
     }, async (args) => textResult(await client.searchChat(args)));
-    server.tool("export_chat", "Export only a fixture-bound chat with bounded message count and UTF-8 byte output.", {
+    server.tool("export_chat", "Export one page-visible chat with bounded message count and UTF-8 byte output.", {
         chatRef: z.string().min(1).max(256),
         format: z.enum(["json", "markdown"]),
         maxMessages: z.number().int().min(1).max(100).optional(),
     }, async (args) => textResult(await client.exportChat(args)));
-    server.tool("send_message", "Send one fixture message only with exact confirmation SEND_MESSAGE and a one-shot idempotency gate.", {
+    server.tool("send_message", "Send one message to a page-visible chat with exact confirmation SEND_MESSAGE and a one-shot idempotency gate.", {
         chatRef: z.string().min(1).max(256),
         text: z.string().min(1).max(100_000),
         confirmation: z.literal("SEND_MESSAGE"),

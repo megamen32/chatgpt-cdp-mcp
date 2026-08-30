@@ -55,16 +55,16 @@ Build the real driver from the compact [driver contract](docs/DRIVER.md). The se
 | `new_chat` | Creates one disposable fixture chat without submitting a prompt. |
 | `list_chats` | Lists visible chats by `unread`, `working`, or `recent`. |
 | `search_chat` | Searches visible titles and message text from one fresh snapshot. |
-| `export_chat` | Exports a fixture chat as bounded JSON or Markdown. |
-| `send_message` | Sends once to the fixture after explicit confirmation. |
+| `export_chat` | Exports a page-visible chat as bounded JSON or Markdown. |
+| `send_message` | Sends once to a page-visible chat after explicit confirmation. |
 | `edit_message` | Edits a fixture message with an optimistic guard. |
 | `download_media` | Saves an allowlisted fixture attachment under a confined directory. |
 
 Read the full [tool reference](docs/TOOLS.md) for inputs, limits, and expected results.
 
-## Why the fixture boundary?
+## Why retain a fixture boundary?
 
-The most expensive browser failures happen when an automation targets the wrong conversation. This project makes read-only discovery convenient, then requires `new_chat` to create the only mutable/exportable target. That makes integration testing fast without turning a production conversation into a test fixture.
+The most expensive browser failures happen when an automation targets the wrong conversation. Page identity checks, opaque references, exact confirmations, and one-shot idempotency keys protect export/send to an existing visible chat. `new_chat` remains available for isolated integration tests; editing and media download stay fixture-bound.
 
 ## Project layout
 

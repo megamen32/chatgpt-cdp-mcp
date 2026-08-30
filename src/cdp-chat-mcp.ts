@@ -56,7 +56,7 @@ export function registerCdpChatTools(server: McpServer, client: CdpChatClient): 
   );
   server.tool(
     "export_chat",
-    "Export only a fixture-bound chat with bounded message count and UTF-8 byte output.",
+    "Export one page-visible chat with bounded message count and UTF-8 byte output.",
     {
       chatRef: z.string().min(1).max(256),
       format: z.enum(["json", "markdown"]),
@@ -66,7 +66,7 @@ export function registerCdpChatTools(server: McpServer, client: CdpChatClient): 
   );
   server.tool(
     "send_message",
-    "Send one fixture message only with exact confirmation SEND_MESSAGE and a one-shot idempotency gate.",
+    "Send one message to a page-visible chat with exact confirmation SEND_MESSAGE and a one-shot idempotency gate.",
     {
       chatRef: z.string().min(1).max(256),
       text: z.string().min(1).max(100_000),

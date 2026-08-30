@@ -160,7 +160,7 @@ async function createFixture(options: ConstructorParameters<typeof CdpChatClient
 
 describe("standalone CDP website chat MCP", () => {
   it("creates one bound fixture and implements unread, working, recent, and search semantics", async () => {
-    const { client, fixture } = await createFixture();
+    const { client, fixture } = await createFixture({ now: () => Date.parse("2026-08-11T12:02:00.000Z") });
     const unread = await client.listChats({ view: "unread", limit: 10 });
     const working = await client.listChats({ view: "working", limit: 10 });
     const recent = await client.listChats({ view: "recent", limit: 10 });
@@ -174,17 +174,24 @@ describe("standalone CDP website chat MCP", () => {
     expect(search.chats[0].matchedMessageRefs).toHaveLength(1);
   });
 
-  it("rejects unbound production targets and detects a lost page lease", async () => {
+  it("allows confirmed sends to a page-visible existing chat and detects a lost page lease", async () => {
     const { client, page } = await createFixture();
     const production = (await client.listChats({ view: "unread" })).chats.find((entry) => entry.title === "Existing production");
     if (!production) throw new Error("production fixture row missing");
-    await expect(client.exportChat({ chatRef: production.chatRef, format: "json" })).rejects.toThrow(/fixture/i);
+    await expect(client.exportChat({ chatRef: production.chatRef, format: "json" })).resolves.toMatchObject({ chatRef: production.chatRef });
+    await expect(client.sendMessage({
+      chatRef: production.chatRef,
+      text: "approved reply",
+      confirmation: "SEND_MESSAGE",
+      idempotencyKey: "production-approved-reply",
+    })).resolves.toMatchObject({ chatRef: production.chatRef });
+    expect(page.sendCalls).toBe(1);
 
     page.identityOverride = identity("different-lease");
     await expect(client.listChats({ view: "recent" })).rejects.toThrow(/lease|ownership/i);
   });
 
-  it("rejects a createChat result that was already visible and never binds production as fixture", async () => {
+  it("rejects a createChat result that was already visible without mistaking it for a fixture", async () => {
     const page = new ExistingIdPage();
     const root = await mkdtemp(join(tmpdir(), "cdp-chat-test-"));
     roots.push(root);
@@ -195,7 +202,7 @@ describe("standalone CDP website chat MCP", () => {
     const production = (await client.listChats({ view: "unread" })).chats.find((entry) => entry.title === "Existing production");
     if (!production) throw new Error("production fixture row missing");
     expect(production.fixtureBound).toBe(false);
-    await expect(client.exportChat({ chatRef: production.chatRef, format: "json" })).rejects.toThrow(/fixture/i);
+    await expect(client.exportChat({ chatRef: production.chatRef, format: "json" })).resolves.toMatchObject({ chatRef: production.chatRef });
   });
 
   it("rejects a concurrent new_chat before creating a second fixture", async () => {

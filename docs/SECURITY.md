@@ -8,10 +8,10 @@ make browser automation risk-free.
 - A browser identity contains origin, account, page, and lease coordinates.
 - Every operation checks that identity before and after it acts.
 - Driver IDs are never returned as MCP IDs.
-- Existing conversations can be listed and searched but cannot be exported,
-  messaged, edited, or used to download media.
-- Those consequential operations require the one new fixture chat created by
-  `new_chat`.
+- Existing visible conversations can be exported and messaged only through their
+  page-bound opaque reference; editing and media download remain fixture-bound.
+- Consequential operations require an explicit confirmation and a one-shot
+  idempotency key bound to the exact operation and payload.
 - Writes require a literal confirmation plus one-shot idempotency keys.
 - Exports and downloads have deliberately small default limits.
 - Download paths, MIME types, and file modes are constrained.

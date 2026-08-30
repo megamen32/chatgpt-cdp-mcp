@@ -49,7 +49,7 @@ It never opens another page.
 { "chatRef": "...", "format": "markdown", "maxMessages": 50 }
 ```
 
-Exports only the fixture chat. Output defaults to 50 messages and is capped at
+Exports one page-visible chat. Output defaults to 50 messages and is capped at
 64 KiB of UTF-8 data. The receipt tells you when content was truncated.
 
 ## `send_message`

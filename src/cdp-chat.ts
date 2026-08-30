@@ -523,12 +523,12 @@ export class CdpChatClient {
     });
   }
 
-  /** Export only a fixture-bound chat with message and byte limits. */
+  /** Export a page-visible chat with message and byte limits. */
   async exportChat(input: ExportChatInput): Promise<ExportChatResult> {
     const maxMessages = input.maxMessages ?? 50;
     if (!Number.isInteger(maxMessages) || maxMessages < 1 || maxMessages > 100) throw new CdpChatError("invalid_limit", "maxMessages must be an integer from 1 to 100");
     return this.withPage("export_chat", async (page, pageIdentity) => {
-      const rawChatId = this.resolveChat(input.chatRef, pageIdentity, true);
+      const rawChatId = this.resolveChat(input.chatRef, pageIdentity, false);
       const chat = await this.findChat(page, rawChatId);
       const messages = chat.messages.slice(0, maxMessages).map((entry) => this.exportedMessage(chat.id, entry, pageIdentity));
       const bounded = buildBoundedExport(chat, input.chatRef, messages, input.format, this.options.maxExportBytes);
@@ -536,14 +536,14 @@ export class CdpChatClient {
     });
   }
 
-  /** Send exactly one fixture message after consuming an exact one-shot gate. */
+  /** Send exactly one message to a page-visible chat after consuming an exact one-shot gate. */
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
     if (!input.text.trim()) throw new CdpChatError("invalid_message", "text must contain at least one non-space character");
     const key = requireOpaque(input.idempotencyKey, "idempotencyKey");
     if (input.confirmation !== "SEND_MESSAGE") throw new CdpChatError("confirmation_required", "send_message requires confirmation SEND_MESSAGE");
     this.consumeGate("send_message", key, { chatRef: input.chatRef, text: input.text });
     return this.withPage("send_message", async (page, pageIdentity) => {
-      const rawChatId = this.resolveChat(input.chatRef, pageIdentity, true);
+      const rawChatId = this.resolveChat(input.chatRef, pageIdentity, false);
       const message = await page.sendMessage({ chatId: rawChatId, text: input.text });
       const publicMessage = this.exportedMessage(rawChatId, message, pageIdentity);
       return { chatRef: input.chatRef, messageRef: publicMessage.messageRef, message: publicMessage };
