@@ -54,6 +54,7 @@ class FakePage implements CdpChatPage {
   ];
   sendCalls = 0;
   editCalls = 0;
+  readonly taskCalls: Array<{ chatId: string; kind: "research" | "search" | "draw"; prompt: string }> = [];
   identityOverride: PageIdentity | undefined;
 
   async identity(): Promise<PageIdentity> {
@@ -98,10 +99,25 @@ class FakePage implements CdpChatPage {
   }
 
   async downloadMedia(input: { chatId: string; messageId: string; mediaId: string }): Promise<DownloadedMedia> {
-    if (input.chatId !== "fixture-chat" || input.messageId !== "fixture-message" || input.mediaId !== "fixture-media") {
-      throw new Error("media not found");
-    }
-    return { bytes: new Uint8Array([1, 2, 3, 4]), filename: "fixture.png", mimeType: "image/png" };
+    const media = this.chats
+      .find((entry) => entry.id === input.chatId)
+      ?.messages.find((entry) => entry.id === input.messageId)
+      ?.media.find((entry) => entry.id === input.mediaId);
+    if (!media) throw new Error("media not found");
+    return { bytes: new Uint8Array([1, 2, 3, 4]), filename: media.filename, mimeType: media.mimeType };
+  }
+
+  async runTask(input: { chatId: string; kind: "research" | "search" | "draw"; prompt: string }): Promise<MessageRecord> {
+    this.taskCalls.push(structuredClone(input));
+    const target = this.chats.find((entry) => entry.id === input.chatId);
+    if (!target) throw new Error("chat not found");
+    const result = message(
+      `task-${input.kind}-${this.taskCalls.length}`,
+      `${input.kind} result: ${input.prompt}`,
+      input.kind === "draw" ? [{ id: "task-drawing", filename: "drawing.png", mimeType: "image/png", size: 4 }] : [],
+    );
+    target.messages.push(result);
+    return structuredClone(result);
   }
 }
 
@@ -315,5 +331,27 @@ describe("standalone CDP website chat MCP", () => {
     expect(sent.message).not.toHaveProperty("id");
     expect(edited.message).not.toHaveProperty("id");
     expect(edited.message.media[0]).not.toHaveProperty("id");
+  });
+
+  it("runs research, search, and draw through the same bound fixture page", async () => {
+    const { client, page, root, fixture } = await createFixture();
+
+    const research = await client.research({ chatRef: fixture.chatRef, prompt: "Compare two approaches" });
+    const search = await client.search({ chatRef: fixture.chatRef, prompt: "Find current evidence" });
+    const draw = await client.draw({ chatRef: fixture.chatRef, prompt: "Draw a compact product diagram" });
+
+    expect(page.taskCalls).toEqual([
+      { chatId: "fixture-chat", kind: "research", prompt: "Compare two approaches" },
+      { chatId: "fixture-chat", kind: "search", prompt: "Find current evidence" },
+      { chatId: "fixture-chat", kind: "draw", prompt: "Draw a compact product diagram" },
+    ]);
+    expect(research).toMatchObject({ chatRef: fixture.chatRef, kind: "research", message: { text: "research result: Compare two approaches" } });
+    expect(search).toMatchObject({ chatRef: fixture.chatRef, kind: "search", message: { text: "search result: Find current evidence" } });
+    expect(draw).toMatchObject({ chatRef: fixture.chatRef, kind: "draw", message: { text: "draw result: Draw a compact product diagram", media: [{ filename: "drawing.png" }] } });
+    expect(JSON.stringify(draw)).not.toContain("task-drawing");
+    const drawing = draw.message.media[0];
+    if (!drawing) throw new Error("draw did not expose media");
+    const downloaded = await client.downloadMedia({ chatRef: fixture.chatRef, messageRef: draw.messageRef, mediaRef: drawing.mediaRef });
+    expect(downloaded.path.startsWith(root)).toBe(true);
   });
 });

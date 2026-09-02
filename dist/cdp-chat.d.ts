@@ -1,4 +1,8 @@
 export type ChatView = "unread" | "working" | "recent";
+export type ChatTaskKind = "research" | "search" | "draw";
+export type CdpChatOperation = "new_chat" | "list_chats" | "search_chat" | "export_chat" | "send_message" | "edit_message" | "download_media" | ChatTaskKind;
+export type CdpChatCapabilities = Readonly<Record<CdpChatOperation, boolean>>;
+export declare const ALL_CDP_CHAT_CAPABILITIES: CdpChatCapabilities;
 export interface PageIdentity {
     origin: string;
     accountRef: string;
@@ -58,10 +62,21 @@ export interface CdpChatPage {
         messageId: string;
         mediaId: string;
     }): Promise<DownloadedMedia>;
+    /**
+     * Submit one prompt using a page-native capability and wait for its final
+     * assistant message. Implement it without opening another browser tab.
+     */
+    runTask?(input: {
+        chatId: string;
+        kind: ChatTaskKind;
+        prompt: string;
+    }): Promise<MessageRecord>;
 }
 /** Acquires the one authenticated page owned by this MCP process. */
 export interface CdpChatDriver {
     acquirePage(): Promise<CdpChatPage>;
+    /** Declare only tools that this concrete browser driver can actually execute. */
+    capabilities?: CdpChatCapabilities;
 }
 export interface CdpChatOptions {
     mediaRoot?: string;
@@ -111,6 +126,18 @@ export interface DownloadMediaInput {
     messageRef: string;
     mediaRef: string;
     outputDir?: string;
+}
+export interface ResearchInput {
+    chatRef: string;
+    prompt: string;
+}
+export interface SearchInput {
+    chatRef: string;
+    prompt: string;
+}
+export interface DrawInput {
+    chatRef: string;
+    prompt: string;
 }
 export interface FixtureReceipt {
     origin: string;
@@ -183,6 +210,12 @@ export interface DownloadMediaResult {
     bytes: number;
     mimeType: string;
 }
+export interface ChatTaskResult {
+    chatRef: string;
+    kind: ChatTaskKind;
+    messageRef: string;
+    message: ExportedMessage;
+}
 /** Error raised when the page, fixture, or bounded output policy is unsafe. */
 export declare class CdpChatError extends Error {
     readonly code: string;
@@ -200,6 +233,7 @@ export declare class CdpChatClient {
     private boundIdentity?;
     private fixture?;
     private newChatInFlight;
+    private taskInFlight;
     /** Construct a client around one injected CDP page driver. */
     constructor(driver: CdpChatDriver, options?: CdpChatOptions);
     /** Create and bind exactly one disposable fixture chat without submitting a prompt. */
@@ -216,6 +250,14 @@ export declare class CdpChatClient {
     editMessage(input: EditMessageInput): Promise<EditMessageResult>;
     /** Download one fixture attachment under a confined root and MIME/size allowlist. */
     downloadMedia(input: DownloadMediaInput): Promise<DownloadMediaResult>;
+    /** Run a page-native research workflow in the one fixture chat. */
+    research(input: ResearchInput): Promise<ChatTaskResult>;
+    /** Run a page-native web-search workflow in the one fixture chat. */
+    search(input: SearchInput): Promise<ChatTaskResult>;
+    /** Run a page-native image-generation workflow in the one fixture chat. */
+    draw(input: DrawInput): Promise<ChatTaskResult>;
+    /** Submit one serialized page-native task without allowing a second tab or task race. */
+    private runTask;
     /** Acquire and re-check one page lease around every operation. */
     private withPage;
     /** Consume a confirmation and idempotency key before any browser mutation. */

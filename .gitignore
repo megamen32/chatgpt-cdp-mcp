@@ -6,3 +6,5 @@ cdp-chat-media/
 *.log
 coverage/
 .agents/
+.tmp/
+graphify-out/

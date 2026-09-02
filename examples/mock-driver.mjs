@@ -59,7 +59,27 @@ export function createCdpChatDriver() {
           message.version += 1;
           return clone(message);
         },
-        async downloadMedia() { throw new Error("mock driver has no attachments"); },
+        async runTask({ chatId, kind, prompt }) {
+          const chat = chats.find((entry) => entry.id === chatId);
+          if (!chat) throw new Error("demo chat not found");
+          const message = {
+            id: `demo-${kind}-${chat.messages.length + 1}`,
+            role: "assistant",
+            text: `[demo ${kind}] ${prompt}`,
+            version: 1,
+            createdAt: now(),
+            media: kind === "draw" ? [{ id: `demo-image-${chat.messages.length + 1}`, filename: "demo-drawing.png", mimeType: "image/png", size: 4 }] : [],
+          };
+          chat.messages.push(message);
+          chat.updatedAt = now();
+          return clone(message);
+        },
+        async downloadMedia({ chatId, messageId, mediaId }) {
+          const message = chats.find((entry) => entry.id === chatId)?.messages.find((entry) => entry.id === messageId);
+          const media = message?.media.find((entry) => entry.id === mediaId);
+          if (!media) throw new Error("demo media not found");
+          return { bytes: new Uint8Array([137, 80, 78, 71]), filename: media.filename, mimeType: media.mimeType };
+        },
       };
     },
   };

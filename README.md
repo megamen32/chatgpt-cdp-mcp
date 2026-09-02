@@ -4,13 +4,15 @@
 
 ![A single chat page connected to MCP tools](docs/assets/hero.png)
 
-> Turn one authenticated ChatGPT browser page into a bounded MCP server — with a driver you control and a single-page lease you can verify.
+> Turn one accessible authenticated ChatGPT browser page into a bounded MCP server — reuse it when present, or create exactly one when it is not.
 
 ChatGPT CDP MCP gives an MCP client a clean, typed tool surface for a browser page you already own. Bring any CDP-capable adapter (Chrome DevTools Protocol, Playwright, BrowserClaw, or your own), point the server at it, and keep the browser integration separate from the MCP contract.
 
-- Seven MCP operations: create, list, search, export, send, edit, and download.
+- A ten-operation portable MCP contract; the bundled BrowserClaw adapter
+  exposes the six operations it can execute today: create, send, download,
+  research, web search, and image generation.
 - One owned browser page per MCP process; every operation rechecks its lease.
-- Existing chats are discoverable; consequential operations are restricted to one disposable fixture created by the server.
+- Existing chats are discoverable, exportable, and sendable with page-bound refs; editing, media download, and task tools stay fixture-bound.
 - Opaque refs keep browser-native IDs out of MCP responses.
 - A bundled mock driver lets you verify the complete MCP wiring before connecting a real account.
 
@@ -30,7 +32,7 @@ Try the safe local demo first — it does not open a browser or contact ChatGPT:
 git clone https://github.com/megamen32/chatgpt-cdp-mcp.git && cd chatgpt-cdp-mcp && npm ci && CDP_CHAT_DRIVER_MODULE=./examples/mock-driver.mjs npm start
 ```
 
-Then configure your MCP client:
+For a real BrowserClaw-backed ChatGPT page, configure your MCP client:
 
 ```json
 {
@@ -38,7 +40,8 @@ Then configure your MCP client:
     "chatgpt": {
       "command": "chatgpt-cdp-mcp",
       "env": {
-        "CDP_CHAT_DRIVER_MODULE": "/absolute/path/to/your-chatgpt-driver.mjs",
+        "CDP_CHAT_DRIVER": "browserclaw",
+        "CDP_CHAT_BROWSERCLAW_MCP_URL": "http://127.0.0.1:9010/mcp",
         "CDP_CHAT_MEDIA_ROOT": "/absolute/path/to/private-media"
       }
     }
@@ -46,19 +49,29 @@ Then configure your MCP client:
 }
 ```
 
-Build the real driver from the compact [driver contract](docs/DRIVER.md). The server intentionally does not ship a browser login flow, profile, cookie, or hosted endpoint.
+The bundled driver reuses the only ChatGPT tab it can access in its BrowserClaw
+MCP session. If it has no accessible ChatGPT page (including when visible tabs
+belong to another session), it opens one `https://chatgpt.com/` tab and retains
+that page for the MCP process; it never opens a tab per tool call. If several
+accessible ChatGPT tabs exist, set `CDP_CHAT_BROWSERCLAW_PAGE` to the exact
+page id. It does not ship a browser login flow, profile, cookie, or hosted
+endpoint. You can still build another adapter from the compact
+[driver contract](docs/DRIVER.md).
 
 ## What it exposes
 
 | Tool | Purpose |
 | --- | --- |
 | `new_chat` | Creates one disposable fixture chat without submitting a prompt. |
-| `list_chats` | Lists visible chats by `unread`, `working`, or `recent`. |
-| `search_chat` | Searches visible titles and message text from one fresh snapshot. |
-| `export_chat` | Exports a page-visible chat as bounded JSON or Markdown. |
+| `list_chats` | Lists visible chats by `unread`, `working`, or `recent` (custom driver). |
+| `search_chat` | Searches visible titles and message text from one fresh snapshot (custom driver). |
+| `export_chat` | Exports a page-visible chat as bounded JSON or Markdown (custom driver). |
 | `send_message` | Sends once to a page-visible chat after explicit confirmation. |
-| `edit_message` | Edits a fixture message with an optimistic guard. |
-| `download_media` | Saves an allowlisted fixture attachment under a confined directory. |
+| `edit_message` | Edits a fixture message with an optimistic guard (custom driver). |
+| `download_media` | Saves an allowlisted fixture attachment; BrowserClaw saves a settled-page PNG for `draw`. |
+| `research` | Runs one research prompt in the fixture via a driver-provided ChatGPT control. |
+| `search` | Runs one web-search prompt in the fixture via a driver-provided ChatGPT control. |
+| `draw` | Runs one image-generation prompt; BrowserClaw can expose a settled-page PNG as an opaque ref. |
 
 Read the full [tool reference](docs/TOOLS.md) for inputs, limits, and expected results.
 
@@ -79,6 +92,11 @@ one browser page you own
 ```
 
 The public package owns the tool contract, opaque references, bounds, and fixture lifecycle. Your adapter owns browser automation and authentication. See [architecture](docs/ARCHITECTURE.md).
+
+`research`, `search`, and `draw` are page-native capabilities, not a hidden
+hosted API. The bundled BrowserClaw driver maps them to the currently available
+ChatGPT UI controls and keeps them in the one fixture chat and tab. Custom
+drivers implement `runTask()` and declare only the operations they support.
 
 ## Development
 

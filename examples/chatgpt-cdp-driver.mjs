@@ -1,5 +1,6 @@
 /**
- * Adapter skeleton. Implement these six operations using your CDP stack
+ * Adapter skeleton. Implement the page contract, including optional runTask(),
+ * using your CDP stack
  * (Playwright, BrowserClaw, Chrome DevTools Protocol, etc.) and point
  * CDP_CHAT_DRIVER_MODULE at this file.
  */

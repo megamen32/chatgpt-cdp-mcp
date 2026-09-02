@@ -8,6 +8,8 @@ import { realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
   CdpChatClient,
+  ALL_CDP_CHAT_CAPABILITIES,
+  type CdpChatCapabilities,
   type CdpChatDriver,
   type EditMessageInput,
   type ExportChatInput,
@@ -16,6 +18,9 @@ import {
   type SearchChatInput,
   type SendMessageInput,
   type DownloadMediaInput,
+  type ResearchInput,
+  type SearchInput,
+  type DrawInput,
 } from "./cdp-chat.js";
 
 /** Return an MCP text result containing only bounded JSON data. */
@@ -24,8 +29,8 @@ function textResult(value: unknown): { content: [{ type: "text"; text: string }]
 }
 
 /** Register all standalone CDP website chat tools on one MCP server. */
-export function registerCdpChatTools(server: McpServer, client: CdpChatClient): void {
-  server.tool(
+export function registerCdpChatTools(server: McpServer, client: CdpChatClient, capabilities: CdpChatCapabilities = ALL_CDP_CHAT_CAPABILITIES): void {
+  if (capabilities.new_chat) server.tool(
     "new_chat",
     "Create exactly one disposable chat on the owned authenticated page without submitting a prompt.",
     {
@@ -35,7 +40,7 @@ export function registerCdpChatTools(server: McpServer, client: CdpChatClient): 
     },
     async (args) => textResult(await client.newChat(args as NewChatInput)),
   );
-  server.tool(
+  if (capabilities.list_chats) server.tool(
     "list_chats",
     "List page-visible chats by explicit unread, observable working, or UTC-recent semantics with bounded pagination.",
     {
@@ -45,7 +50,7 @@ export function registerCdpChatTools(server: McpServer, client: CdpChatClient): 
     },
     async (args) => textResult(await client.listChats(args as ListChatsInput)),
   );
-  server.tool(
+  if (capabilities.search_chat) server.tool(
     "search_chat",
     "Search page-visible chat titles and message text using one fresh owned-page snapshot.",
     {
@@ -54,7 +59,7 @@ export function registerCdpChatTools(server: McpServer, client: CdpChatClient): 
     },
     async (args) => textResult(await client.searchChat(args as SearchChatInput)),
   );
-  server.tool(
+  if (capabilities.export_chat) server.tool(
     "export_chat",
     "Export one page-visible chat with bounded message count and UTF-8 byte output.",
     {
@@ -64,7 +69,7 @@ export function registerCdpChatTools(server: McpServer, client: CdpChatClient): 
     },
     async (args) => textResult(await client.exportChat(args as ExportChatInput)),
   );
-  server.tool(
+  if (capabilities.send_message) server.tool(
     "send_message",
     "Send one message to a page-visible chat with exact confirmation SEND_MESSAGE and a one-shot idempotency gate.",
     {
@@ -75,7 +80,7 @@ export function registerCdpChatTools(server: McpServer, client: CdpChatClient): 
     },
     async (args) => textResult(await client.sendMessage(args as SendMessageInput)),
   );
-  server.tool(
+  if (capabilities.edit_message) server.tool(
     "edit_message",
     "Edit one fixture message only with exact confirmation EDIT_MESSAGE, one-shot idempotency, and an expected version or old-text guard.",
     {
@@ -89,7 +94,7 @@ export function registerCdpChatTools(server: McpServer, client: CdpChatClient): 
     },
     async (args) => textResult(await client.editMessage(args as EditMessageInput)),
   );
-  server.tool(
+  if (capabilities.download_media) server.tool(
     "download_media",
     "Download one fixture attachment of an allowlisted MIME and size into the confined media root.",
     {
@@ -100,6 +105,33 @@ export function registerCdpChatTools(server: McpServer, client: CdpChatClient): 
     },
     async (args) => textResult(await client.downloadMedia(args as DownloadMediaInput)),
   );
+  if (capabilities.research) server.tool(
+    "research",
+    "Run one deep-research-style prompt in the disposable fixture chat through the owned ChatGPT page. The configured driver must implement the page's research control.",
+    {
+      chatRef: z.string().min(1).max(256),
+      prompt: z.string().trim().min(1).max(100_000),
+    },
+    async (args) => textResult(await client.research(args as ResearchInput)),
+  );
+  if (capabilities.search) server.tool(
+    "search",
+    "Run one web-search-style prompt in the disposable fixture chat through the owned ChatGPT page. The configured driver must implement the page's web search control.",
+    {
+      chatRef: z.string().min(1).max(256),
+      prompt: z.string().trim().min(1).max(100_000),
+    },
+    async (args) => textResult(await client.search(args as SearchInput)),
+  );
+  if (capabilities.draw) server.tool(
+    "draw",
+    "Run one image-generation prompt in the disposable fixture chat through the owned ChatGPT page. Generated media returns as opaque downloadable refs when the driver exposes it.",
+    {
+      chatRef: z.string().min(1).max(256),
+      prompt: z.string().trim().min(1).max(100_000),
+    },
+    async (args) => textResult(await client.draw(args as DrawInput)),
+  );
 }
 
 /** Create the standalone MCP server around an already configured page driver. */
@@ -109,12 +141,20 @@ export function createCdpChatServer(driver: CdpChatDriver, options: ConstructorP
     version: "0.1.0",
     description: "Bounded ChatGPT chat operations over one owned CDP page",
   });
-  registerCdpChatTools(server, new CdpChatClient(driver, options));
+  registerCdpChatTools(server, new CdpChatClient(driver, options), driver.capabilities ?? ALL_CDP_CHAT_CAPABILITIES);
   return server;
 }
 
 /** Load a BrowserClaw/CDP driver factory from an explicit local module path. */
 export async function loadCdpChatDriver(modulePath = process.env.CDP_CHAT_DRIVER_MODULE): Promise<CdpChatDriver> {
+  const selectedDriver = process.env.CDP_CHAT_DRIVER?.trim();
+  if (selectedDriver === "browserclaw") {
+    const { createBrowserClawCdpChatDriver } = await import("./browserclaw-driver.js");
+    return createBrowserClawCdpChatDriver();
+  }
+  if (selectedDriver && selectedDriver !== "module") {
+    throw new Error("CDP_CHAT_DRIVER must be browserclaw or module");
+  }
   if (!modulePath) throw new Error("CDP_CHAT_DRIVER_MODULE must point to the BrowserClaw/CDP driver module");
   const resolved = isAbsolute(modulePath) ? modulePath : resolve(process.cwd(), modulePath);
   const loaded = await import(pathToFileURL(resolved).href) as { createCdpChatDriver?: () => CdpChatDriver | Promise<CdpChatDriver>; default?: () => CdpChatDriver | Promise<CdpChatDriver> };

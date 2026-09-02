@@ -1,6 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, lstat, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+export const ALL_CDP_CHAT_CAPABILITIES = {
+    new_chat: true,
+    list_chats: true,
+    search_chat: true,
+    export_chat: true,
+    send_message: true,
+    edit_message: true,
+    download_media: true,
+    research: true,
+    search: true,
+    draw: true,
+};
 const DEFAULT_ALLOWED_MEDIA_TYPES = new Set([
     "image/png",
     "image/jpeg",
@@ -208,6 +220,7 @@ export class CdpChatClient {
     boundIdentity;
     fixture;
     newChatInFlight = false;
+    taskInFlight = false;
     /** Construct a client around one injected CDP page driver. */
     constructor(driver, options = {}) {
         this.driver = driver;
@@ -380,6 +393,42 @@ export class CdpChatClient {
             await writeFile(path, Buffer.from(result.bytes), { flag: "wx", mode: 0o600 });
             return { chatRef: input.chatRef, messageRef: input.messageRef, mediaRef: input.mediaRef, path, bytes: result.bytes.byteLength, mimeType: result.mimeType };
         });
+    }
+    /** Run a page-native research workflow in the one fixture chat. */
+    async research(input) {
+        return this.runTask("research", input.chatRef, input.prompt);
+    }
+    /** Run a page-native web-search workflow in the one fixture chat. */
+    async search(input) {
+        return this.runTask("search", input.chatRef, input.prompt);
+    }
+    /** Run a page-native image-generation workflow in the one fixture chat. */
+    async draw(input) {
+        return this.runTask("draw", input.chatRef, input.prompt);
+    }
+    /** Submit one serialized page-native task without allowing a second tab or task race. */
+    async runTask(kind, chatRef, prompt) {
+        const normalizedPrompt = prompt.trim();
+        if (!normalizedPrompt || normalizedPrompt.length > 100_000) {
+            throw new CdpChatError("invalid_task_prompt", "prompt must contain 1 to 100000 characters");
+        }
+        if (this.taskInFlight)
+            throw new CdpChatError("task_in_progress", "another ChatGPT task is still running on the owned page");
+        this.taskInFlight = true;
+        try {
+            return await this.withPage(kind, async (page, pageIdentity) => {
+                const rawChatId = this.resolveChat(chatRef, pageIdentity, true);
+                if (typeof page.runTask !== "function") {
+                    throw new CdpChatError("task_not_supported", "task_not_supported: this CDP driver does not implement runTask for research, search, or draw");
+                }
+                const message = await page.runTask({ chatId: rawChatId, kind, prompt: normalizedPrompt });
+                const publicMessage = this.exportedMessage(rawChatId, message, pageIdentity);
+                return { chatRef, kind, messageRef: publicMessage.messageRef, message: publicMessage };
+            });
+        }
+        finally {
+            this.taskInFlight = false;
+        }
     }
     /** Acquire and re-check one page lease around every operation. */
     async withPage(operation, callback) {

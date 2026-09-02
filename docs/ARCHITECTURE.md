@@ -30,3 +30,8 @@ shipping account state in an npm package or Git repository.
 The server invokes `identity()` before and after every operation. A changed
 origin, account, page, or lease invalidates the action. This protects opaque
 refs from being accidentally replayed against a different browser page.
+
+The bundled BrowserClaw driver is one such local driver. On startup it reuses
+the only ChatGPT tab accessible to its BrowserClaw session; when none is
+accessible, it creates exactly one. It stores that page id in the process and
+never calls `tabs:new` for an individual MCP tool invocation.

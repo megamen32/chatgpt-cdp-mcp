@@ -3,6 +3,31 @@ import { mkdir, lstat, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type ChatView = "unread" | "working" | "recent";
+export type ChatTaskKind = "research" | "search" | "draw";
+export type CdpChatOperation =
+  | "new_chat"
+  | "list_chats"
+  | "search_chat"
+  | "export_chat"
+  | "send_message"
+  | "edit_message"
+  | "download_media"
+  | ChatTaskKind;
+
+export type CdpChatCapabilities = Readonly<Record<CdpChatOperation, boolean>>;
+
+export const ALL_CDP_CHAT_CAPABILITIES: CdpChatCapabilities = {
+  new_chat: true,
+  list_chats: true,
+  search_chat: true,
+  export_chat: true,
+  send_message: true,
+  edit_message: true,
+  download_media: true,
+  research: true,
+  search: true,
+  draw: true,
+};
 
 export interface PageIdentity {
   origin: string;
@@ -60,11 +85,18 @@ export interface CdpChatPage {
     expectedText?: string;
   }): Promise<MessageRecord>;
   downloadMedia(input: { chatId: string; messageId: string; mediaId: string }): Promise<DownloadedMedia>;
+  /**
+   * Submit one prompt using a page-native capability and wait for its final
+   * assistant message. Implement it without opening another browser tab.
+   */
+  runTask?(input: { chatId: string; kind: ChatTaskKind; prompt: string }): Promise<MessageRecord>;
 }
 
 /** Acquires the one authenticated page owned by this MCP process. */
 export interface CdpChatDriver {
   acquirePage(): Promise<CdpChatPage>;
+  /** Declare only tools that this concrete browser driver can actually execute. */
+  capabilities?: CdpChatCapabilities;
 }
 
 export interface CdpChatOptions {
@@ -122,6 +154,21 @@ export interface DownloadMediaInput {
   messageRef: string;
   mediaRef: string;
   outputDir?: string;
+}
+
+export interface ResearchInput {
+  chatRef: string;
+  prompt: string;
+}
+
+export interface SearchInput {
+  chatRef: string;
+  prompt: string;
+}
+
+export interface DrawInput {
+  chatRef: string;
+  prompt: string;
 }
 
 export interface FixtureReceipt {
@@ -204,6 +251,13 @@ export interface DownloadMediaResult {
   path: string;
   bytes: number;
   mimeType: string;
+}
+
+export interface ChatTaskResult {
+  chatRef: string;
+  kind: ChatTaskKind;
+  messageRef: string;
+  message: ExportedMessage;
 }
 
 type RefKind = "chat" | "message" | "media";
@@ -432,6 +486,7 @@ export class CdpChatClient {
   private boundIdentity?: PageIdentity;
   private fixture?: FixtureBinding;
   private newChatInFlight = false;
+  private taskInFlight = false;
 
   /** Construct a client around one injected CDP page driver. */
   constructor(private readonly driver: CdpChatDriver, options: CdpChatOptions = {}) {
@@ -589,6 +644,44 @@ export class CdpChatClient {
       await writeFile(path, Buffer.from(result.bytes), { flag: "wx", mode: 0o600 });
       return { chatRef: input.chatRef, messageRef: input.messageRef, mediaRef: input.mediaRef, path, bytes: result.bytes.byteLength, mimeType: result.mimeType };
     });
+  }
+
+  /** Run a page-native research workflow in the one fixture chat. */
+  async research(input: ResearchInput): Promise<ChatTaskResult> {
+    return this.runTask("research", input.chatRef, input.prompt);
+  }
+
+  /** Run a page-native web-search workflow in the one fixture chat. */
+  async search(input: SearchInput): Promise<ChatTaskResult> {
+    return this.runTask("search", input.chatRef, input.prompt);
+  }
+
+  /** Run a page-native image-generation workflow in the one fixture chat. */
+  async draw(input: DrawInput): Promise<ChatTaskResult> {
+    return this.runTask("draw", input.chatRef, input.prompt);
+  }
+
+  /** Submit one serialized page-native task without allowing a second tab or task race. */
+  private async runTask(kind: ChatTaskKind, chatRef: string, prompt: string): Promise<ChatTaskResult> {
+    const normalizedPrompt = prompt.trim();
+    if (!normalizedPrompt || normalizedPrompt.length > 100_000) {
+      throw new CdpChatError("invalid_task_prompt", "prompt must contain 1 to 100000 characters");
+    }
+    if (this.taskInFlight) throw new CdpChatError("task_in_progress", "another ChatGPT task is still running on the owned page");
+    this.taskInFlight = true;
+    try {
+      return await this.withPage(kind, async (page, pageIdentity) => {
+        const rawChatId = this.resolveChat(chatRef, pageIdentity, true);
+        if (typeof page.runTask !== "function") {
+          throw new CdpChatError("task_not_supported", "task_not_supported: this CDP driver does not implement runTask for research, search, or draw");
+        }
+        const message = await page.runTask({ chatId: rawChatId, kind, prompt: normalizedPrompt });
+        const publicMessage = this.exportedMessage(rawChatId, message, pageIdentity);
+        return { chatRef, kind, messageRef: publicMessage.messageRef, message: publicMessage };
+      });
+    } finally {
+      this.taskInFlight = false;
+    }
   }
 
   /** Acquire and re-check one page lease around every operation. */
