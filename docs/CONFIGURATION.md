@@ -43,3 +43,33 @@ chatgpt-cdp-mcp
 
 The custom module loads in the server process. Keep it local and protect any
 browser-specific configuration with normal operating-system permissions.
+
+## Bundled token driver (read-only, no browser)
+
+```bash
+export CDP_CHAT_DRIVER=token
+export CHATGPT_TOKEN_SESSION_TOKEN=__Secure-next-auth.session-token value
+# or: CHATGPT_TOKEN_SESSION_FILE=/path/to/session.json ({"session_token": "..."})
+export CHATGPT_TOKEN_FETCH_COMMAND="python3 examples/token_bridge.py"
+export CHATGPT_TOKEN_SNAPSHOT_DEPTH=10
+export CHATGPT_TOKEN_DETAIL_DELAY_MS=1200
+chatgpt-cdp-mcp
+```
+
+The token driver exchanges the long-lived `__Secure-next-auth.session-token`
+cookie for a short-lived `accessToken` at `/api/auth/session` and reads
+`backend-api/conversations` and `/backend-api/conversation/{id}` directly —
+no browser. It declares only `list_chats`, `search_chat`, and `export_chat`;
+page actions (`new_chat`, `send_message`, `edit_message`, `download_media`,
+`research`, `draw`) require a CDP driver.
+
+chatgpt.com sits behind Cloudflare, which rejects non-browser TLS
+fingerprints: plain Node `fetch` usually gets 403. Use
+`CHATGPT_TOKEN_FETCH_COMMAND` with the bundled `examples/token_bridge.py`
+(`pip install curl_cffi`) or any curl-impersonate bridge. Cookies returned by
+the server are kept in a jar and replayed on subsequent requests.
+
+`CHATGPT_TOKEN_SNAPSHOT_DEPTH` (default 10) bounds how many newest chats get
+their full message tree in one snapshot; `CHATGPT_TOKEN_DETAIL_DELAY_MS`
+(default 1200) spaces those detail requests out — the conversation endpoint
+answers with an empty mapping under rapid polling.
