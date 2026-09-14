@@ -124,3 +124,7 @@ The test suite uses an in-memory browser page; no ChatGPT account, browser profi
 - [Contributing](CONTRIBUTING.md)
 
 MIT © 2026 megamen32
+
+### Agent Herder integration
+
+Agent Herder can expose existing ChatGPT conversations as resumable agent sessions while reusing one BrowserClaw-owned page. The token driver remains the fast read path; BrowserClaw/CDP is used when a mutation such as continuing an existing conversation is required. Both transports can read — `read-only` describes the current token driver's mutation capability, not ChatGPT integration as a whole.
