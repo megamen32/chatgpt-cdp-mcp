@@ -1,6 +1,6 @@
 # ChatGPT CDP MCP
 
-[Русский](docs/README.ru.md) · [Quick start](docs/QUICKSTART.md) · [Driver guide](docs/DRIVER.md) · [Tool reference](docs/TOOLS.md)
+[Русский](docs/README.ru.md) · [Quick start](docs/QUICKSTART.md) · [Driver guide](docs/DRIVER.md) · [Chrome CDP driver](docs/CHROME-CDP.md) · [Tool reference](docs/TOOLS.md)
 
 ![A single chat page connected to MCP tools](docs/assets/hero.png)
 
@@ -11,6 +11,9 @@ ChatGPT CDP MCP gives an MCP client a clean, typed tool surface for a browser pa
 - A ten-operation portable MCP contract; the bundled BrowserClaw adapter
   exposes the six operations it can execute today: create, send, download,
   research, web search, and image generation.
+- A bundled Chrome CDP driver that talks to the Chrome you already run over the
+  browser DevTools WebSocket — no BrowserClaw, no launchd unit, no OS
+  automation.
 - One owned browser page per MCP process; every operation rechecks its lease.
 - Existing chats are discoverable, exportable, and sendable with page-bound refs; editing, media download, and task tools stay fixture-bound.
 - Opaque refs keep browser-native IDs out of MCP responses.
@@ -57,6 +60,35 @@ accessible ChatGPT tabs exist, set `CDP_CHAT_BROWSERCLAW_PAGE` to the exact
 page id. It does not ship a browser login flow, profile, cookie, or hosted
 endpoint. You can still build another adapter from the compact
 [driver contract](docs/DRIVER.md).
+
+## Connect straight to your own Chrome
+
+`CDP_CHAT_DRIVER=chrome-cdp` talks to a Chrome you already run — no BrowserClaw,
+no launchd unit, no OS automation, only the browser DevTools WebSocket:
+
+```json
+{
+  "mcpServers": {
+    "chatgpt": {
+      "command": "chatgpt-cdp-mcp",
+      "env": {
+        "CDP_CHAT_DRIVER": "chrome-cdp",
+        "CDP_CHAT_CHROME_PROFILE_DIR": "/Users/you/Library/Application Support/Google/Chrome"
+      }
+    }
+  }
+}
+```
+
+Chrome 136+ ignores `--remote-debugging-port` for the default profile, so a
+real profile is reachable only through *Allow remote debugging for this
+browser instance* at `chrome://inspect/#remote-debugging`. On that route the
+HTTP discovery endpoints answer 404 and Chrome serves only the browser
+WebSocket, which the driver reaches through `<user-data-dir>/DevToolsActivePort`
+and proves it owns with the argv profile and the socket owner. A second
+supported route is `--remote-debugging-port` with a non-default
+`--user-data-dir`. Both routes, the ownership proof and every refusal are
+documented in the [Chrome CDP driver guide](docs/CHROME-CDP.md).
 
 ## What it exposes
 

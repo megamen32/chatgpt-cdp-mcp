@@ -96,8 +96,12 @@ export async function loadCdpChatDriver(modulePath = process.env.CDP_CHAT_DRIVER
         const { createTokenCdpChatDriver } = await import("./token-driver.js");
         return createTokenCdpChatDriver();
     }
+    if (selectedDriver === "chrome-cdp") {
+        const { createChromeCdpCdpChatDriver } = await import("./chrome-cdp-driver.js");
+        return createChromeCdpCdpChatDriver();
+    }
     if (selectedDriver && selectedDriver !== "module") {
-        throw new Error("CDP_CHAT_DRIVER must be browserclaw, token or module");
+        throw new Error("CDP_CHAT_DRIVER must be browserclaw, chrome-cdp, token or module");
     }
     if (!modulePath)
         throw new Error("CDP_CHAT_DRIVER_MODULE must point to the BrowserClaw/CDP driver module");

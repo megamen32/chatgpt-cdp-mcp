@@ -2,7 +2,7 @@
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
-| `CDP_CHAT_DRIVER` | One driver selector | `browserclaw` for the bundled BrowserClaw adapter; `module` (or unset) for a custom module. |
+| `CDP_CHAT_DRIVER` | One driver selector | `browserclaw` for the bundled BrowserClaw adapter; `chrome-cdp` for the bundled Chrome DevTools Protocol driver; `token` for the read-only cookie driver; `module` (or unset) for a custom module. |
 | `CDP_CHAT_DRIVER_MODULE` | For `module` | Absolute or working-directory-relative ESM module exporting `createCdpChatDriver()` or a default factory. |
 | `CDP_CHAT_MEDIA_ROOT` | No | Private root for fixture attachment downloads. Defaults to `./cdp-chat-media`. |
 | `CDP_CHAT_BROWSERCLAW_MCP_URL` | No | BrowserClaw Streamable HTTP endpoint. Defaults to `http://127.0.0.1:9010/mcp`. |
@@ -32,6 +32,31 @@ export CDP_CHAT_BROWSERCLAW_PAGE=42
 The bundled adapter exposes `new_chat`, `send_message`, `download_media`,
 `research`, `search`, and `draw`. Its `draw` download is a current-page PNG
 screenshot after the generated image settles, not the original image asset.
+
+## Bundled Chrome CDP driver (your own Chrome, no BrowserClaw)
+
+```bash
+export CDP_CHAT_DRIVER=chrome-cdp
+export CDP_CHAT_CHROME_PROFILE_DIR="$HOME/Library/Application Support/Google/Chrome"
+export CDP_CHAT_MEDIA_ROOT=/srv/private/chatgpt-media
+chatgpt-cdp-mcp
+```
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `CDP_CHAT_CHROME_PROFILE_DIR` | No | Chrome user-data-dir that owns the DevTools port. Defaults to the platform profile directory. |
+| `CDP_CHAT_CHROME_BROWSER_WS_URL` | No | Explicit browser WebSocket URL, bypassing `DevToolsActivePort` discovery. |
+| `CDP_CHAT_CHROME_TARGET_ID` | No | Page target id to own when several ChatGPT pages are open. |
+| `CDP_CHAT_CHROME_TIMEOUT_MS` | No | Per-operation deadline from 1,000 to 3,600,000 ms. Defaults to 120,000. |
+
+The driver needs the remote-debugging toggle at
+`chrome://inspect/#remote-debugging` for a real profile, because Chrome 136+
+ignores `--remote-debugging-port` for the default `--user-data-dir`. On that
+route `/json/*` answers 404, so the endpoint comes from
+`<user-data-dir>/DevToolsActivePort` and the ownership of the port is proved
+from that file, the argv profile and the socket owner. The full route
+description, the refusal list and the driver semantics are in
+[the Chrome CDP driver guide](CHROME-CDP.md).
 
 ## Custom module driver
 
