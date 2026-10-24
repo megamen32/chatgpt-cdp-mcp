@@ -134,7 +134,10 @@ export async function readDevToolsEndpoint(profileDir: string): Promise<DevTools
 
 /** Look up the inode of a listening TCP port in `/proc/net/tcp`. */
 async function linuxListeningInode(port: number): Promise<string | undefined> {
-  const hexPort = port.toString(16).padStart(4, "0");
+  // /proc/net/tcp prints the port in upper-case hex, so the comparison has
+  // to use the same case. With a lower-case port the lookup never matched
+  // and every port whose hex had a letter was reported as unowned.
+  const hexPort = port.toString(16).padStart(4, "0").toUpperCase();
   for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
     let table: string;
     try {
