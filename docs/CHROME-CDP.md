@@ -179,8 +179,8 @@ The driver declares only what it can execute:
 | `export_chat` | yes — the open chat and the disposable fixture chat |
 | `send_message` | yes |
 | `edit_message` | no |
-| `download_media` | no |
-| `research`, `search`, `draw` | no — no page-native mode control is driven yet |
+| `download_media` | no — the code path exists (the images of a conversation are fetched through the page), but it is not verified against a real image conversation yet |
+| `research`, `search`, `draw` | no — this ChatGPT build exposes image generation as its own section and not as a composer control, so no page-native mode control is driven yet |
 
 The MCP contract itself does not change: the ten operations, the opaque refs
 and the `send_message` shape stay exactly as documented in

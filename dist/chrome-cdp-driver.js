@@ -42,10 +42,14 @@ export const CHROME_CDP_CHAT_CAPABILITIES = {
     export_chat: true,
     send_message: true,
     edit_message: false,
-    download_media: true,
+    // The download path is implemented, but it was never verified against a
+    // real image conversation, so the capability stays off until it is.
+    download_media: false,
     research: false,
     search: false,
-    draw: true,
+    // This ChatGPT build exposes image generation as its own section, not as a
+    // composer control, so the control is not driven yet.
+    draw: false,
 };
 /** Open a WebSocket to a DevTools endpoint with the standard `ws` client. */
 export const defaultWebSocketFactory = (url) => {
@@ -225,11 +229,12 @@ const OPEN_MODEL_MENU = `(() => {
 })()`;
 /** Open the page-native tools menu of the composer. */
 const OPEN_TOOLS_MENU = `(() => {
-  const composer = ${COMPOSER_RESOLVER};
-  const form = composer?.closest('form');
   const normalize = (value) => (value || '').replace(/\s+/gu, ' ').trim();
-  const button = [...(form?.querySelectorAll('button') ?? [])].find((b) =>
-    /добавить файлы и другое|add files and more|tools|инструменты/iu.test(normalize(b.getAttribute('aria-label')) || normalize(b.innerText)));
+  const buttons = [...document.querySelectorAll('button,[role="button"]')].filter((b) => {
+    const label = normalize(b.getAttribute('aria-label')) || normalize(b.innerText);
+    return /добавить файлы и другое|add files and more|инструменты|tools/iu.test(label);
+  });
+  const button = buttons[buttons.length - 1];
   if (!button) return { opened: false };
   button.click();
   return { opened: true };
@@ -237,9 +242,17 @@ const OPEN_TOOLS_MENU = `(() => {
 /** Read the items of an open popup menu. */
 const READ_POPUP_ITEMS = `(() => {
   const items = [...document.querySelectorAll('[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"]')];
-  return items
-    .map((item) => ({ label: (item.innerText || item.getAttribute('aria-label') || '').replace(/\s+/gu, ' ').trim() }))
-    .filter((entry) => entry.label.length > 0);
+  const labels = items
+    .map((item) => (item.innerText || item.getAttribute('aria-label') || '').replace(/\s+/gu, ' ').trim())
+    .filter((entry) => entry.length > 0);
+  if (labels.length > 0) return labels.map((label) => ({ label }));
+  // Some menus render plain buttons inside a popup container.
+  const containers = [...document.querySelectorAll('[role="menu"],[role="dialog"],[role="listbox"],[data-radix-popper-content-wrapper]')];
+  const fallback = containers
+    .flatMap((container) => [...container.querySelectorAll('button,[role="menuitem"],[role="button"]')])
+    .map((item) => (item.innerText || item.getAttribute('aria-label') || '').replace(/\s+/gu, ' ').trim())
+    .filter((entry) => entry.length > 0 && entry.length < 80);
+  return [...new Set(fallback)].map((label) => ({ label }));
 })()`;
 /** Close an open popup menu. */
 const CLOSE_POPUP = `(() => {
@@ -250,7 +263,9 @@ const CLOSE_POPUP = `(() => {
 function selectPopupItemExpression(pattern) {
     return `(() => {
   const items = [...document.querySelectorAll('[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"]')];
-  const target = items.find((item) => new RegExp(${JSON.stringify(pattern)}, 'iu').test((item.innerText || item.getAttribute('aria-label') || '').replace(/\s+/gu, ' ').trim()));
+  const containers = [...document.querySelectorAll('[role="menu"],[role="dialog"],[role="listbox"],[data-radix-popper-content-wrapper]')];
+  const candidates = [...items, ...containers.flatMap((container) => [...container.querySelectorAll('button,[role="menuitem"],[role="button"]')])];
+  const target = candidates.find((item) => new RegExp(${JSON.stringify(pattern)}, 'iu').test((item.innerText || item.getAttribute('aria-label') || '').replace(/\s+/gu, ' ').trim()));
   if (!target) return { selected: false };
   target.click();
   return { selected: true };
@@ -796,7 +811,10 @@ class ChromeCdpPage {
             throw new ChromeCdpError("chrome_cdp_task_unsupported", `The Chrome CDP driver does not implement the '${input.kind}' control.`);
         }
         await this.openChatForSending(input.chatId);
-        const opened = await this.sessionProvider().evaluate(OPEN_TOOLS_MENU);
+        const opened = await waitFor(async () => {
+            const result = await this.sessionProvider().evaluate(OPEN_TOOLS_MENU);
+            return result?.opened ? result : undefined;
+        }, 15_000, "tools menu").catch(() => undefined);
         if (!opened?.opened) {
             throw new ChromeCdpError("chrome_cdp_task_control_missing", "The ChatGPT tools menu was not found on the owned page.");
         }
