@@ -53,6 +53,8 @@ interface ScriptedBrowser {
   closed: boolean;
   /** Model the page-native control: it rewrites the URL but keeps the conversation. */
   newChatKeepsConversation: boolean;
+  /** How many pages the driver had to open itself. */
+  createdTargets: number;
   /** Drop the first submit so the driver has to repeat it. */
   droppedSubmits: number;
 }
@@ -92,6 +94,7 @@ async function startScriptedBrowser(overrides: Partial<ScriptedBrowser> = {}): P
     navigated: [],
     closed: false,
     newChatKeepsConversation: false,
+    createdTargets: 0,
     droppedSubmits: 0,
     ...overrides,
   };
@@ -121,6 +124,12 @@ function respond(browser: ScriptedBrowser, method: string, params: Record<string
       return { targetInfos: browser.targets };
     case "Target.attachToTarget":
       return { sessionId: "page-session-1" };
+    case "Target.createTarget": {
+      const targetId = `created-target-${browser.targets.length + 1}`;
+      browser.targets.push({ targetId, type: "page", url: "https://chatgpt.com/" });
+      browser.createdTargets += 1;
+      return { targetId };
+    }
     case "Page.navigate": {
       browser.navigated.push(String(params.url ?? ""));
       browser.url = String(params.url ?? browser.url);
@@ -378,7 +387,7 @@ describe("chrome-cdp driver", () => {
     expect(scripted.browser.units.some((unit) => unit.text.includes("повтор отправки"))).toBe(true);
   });
 
-  it("refuses when no ChatGPT page is open", async () => {
+  it("opens exactly one ChatGPT page when none is open", async () => {
     const profileDir = await createProfile("9222\n/devtools/browser/abc\n");
     const scripted = await startScriptedBrowser({ targets: [{ targetId: "t", type: "page", url: "https://example.com/" }] });
     const driver = await createChromeCdpCdpChatDriver({
@@ -386,7 +395,22 @@ describe("chrome-cdp driver", () => {
       ownershipProbe: async () => owner(profileDir),
       browserWsUrl: scripted.url,
     });
-    await expect(driver.acquirePage()).rejects.toThrow(/no open ChatGPT page/);
+    const page = await driver.acquirePage();
+    expect(scripted.browser.createdTargets).toBe(1);
+    const snapshot = await page.snapshot();
+    expect(snapshot.chats.length).toBeGreaterThan(0);
+  });
+
+  it("refuses when the requested page target is not open", async () => {
+    const profileDir = await createProfile("9222\n/devtools/browser/abc\n");
+    const scripted = await startScriptedBrowser();
+    const driver = await createChromeCdpCdpChatDriver({
+      profileDir,
+      ownershipProbe: async () => owner(profileDir),
+      browserWsUrl: scripted.url,
+      targetId: "missing-target",
+    });
+    await expect(driver.acquirePage()).rejects.toThrow(/requested ChatGPT page missing-target is not open/);
   });
 
   it("refuses when several ChatGPT pages are open", async () => {

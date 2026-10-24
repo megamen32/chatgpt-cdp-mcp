@@ -42,10 +42,10 @@ export const CHROME_CDP_CHAT_CAPABILITIES = {
     export_chat: true,
     send_message: true,
     edit_message: false,
-    download_media: false,
+    download_media: true,
     research: false,
     search: false,
-    draw: false,
+    draw: true,
 };
 /** Open a WebSocket to a DevTools endpoint with the standard `ws` client. */
 export const defaultWebSocketFactory = (url) => {
@@ -87,7 +87,7 @@ const COMPOSER_RESOLVER = `(() => {
   return visible[visible.length - 1] ?? candidates[candidates.length - 1];
 })()`;
 /** Read the sidebar, the rendered conversation and the composer state. */
-const READ_PAGE_STATE = `(() => {
+const READ_PAGE_STATE = `(async () => {
   const chats = [];
   const seen = new Set();
   for (const a of document.querySelectorAll('a[href^="/c/"]')) {
@@ -105,11 +105,29 @@ const READ_PAGE_STATE = `(() => {
     const body = u.querySelector('[data-chatgpt-selection-message-id]');
     let role = roleNode ? (roleNode.getAttribute('data-conversation-role') || '') : '';
     if (!role) role = /:user$/u.test(key) ? 'user' : (/:assistant$/u.test(key) ? 'assistant' : '');
+    const media = [];
+    for (const img of u.querySelectorAll('img[src]')) {
+      const src = img.currentSrc || img.getAttribute('src') || '';
+      if (!src || src.startsWith('data:')) continue;
+      let mimeType = '';
+      let size = 0;
+      try {
+        const response = await fetch(src, { credentials: 'include' });
+        mimeType = response.headers.get('content-type') || '';
+        const length = Number(response.headers.get('content-length') || '0');
+        size = Number.isFinite(length) ? length : 0;
+        await response.body?.cancel();
+      } catch (error) {
+        mimeType = '';
+      }
+      media.push({ src, mimeType, size });
+    }
     units.push({
       key,
       role,
       messageId: body ? (body.getAttribute('data-chatgpt-selection-message-id') || '') : '',
       text: ((body ? body.innerText : u.innerText) || '').trim(),
+      media,
     });
   }
   const buttons = [];
@@ -193,6 +211,63 @@ function insertTextExpression(text) {
   return { inserted: inserted || current.indexOf(text) !== -1 };
 })()`;
 }
+/** Open the page-native model picker. */
+const OPEN_MODEL_MENU = `(() => {
+  const normalize = (value) => (value || '').replace(/\s+/gu, ' ').trim();
+  const buttons = [...document.querySelectorAll('button,[role="button"]')].filter((b) => {
+    const label = normalize(b.getAttribute('aria-label')) || normalize(b.innerText);
+    return /выбрать модель|choose chatgpt model|choose model|select model/iu.test(label);
+  });
+  const button = buttons[buttons.length - 1];
+  if (!button) return { opened: false };
+  button.click();
+  return { opened: true };
+})()`;
+/** Open the page-native tools menu of the composer. */
+const OPEN_TOOLS_MENU = `(() => {
+  const composer = ${COMPOSER_RESOLVER};
+  const form = composer?.closest('form');
+  const normalize = (value) => (value || '').replace(/\s+/gu, ' ').trim();
+  const button = [...(form?.querySelectorAll('button') ?? [])].find((b) =>
+    /добавить файлы и другое|add files and more|tools|инструменты/iu.test(normalize(b.getAttribute('aria-label')) || normalize(b.innerText)));
+  if (!button) return { opened: false };
+  button.click();
+  return { opened: true };
+})()`;
+/** Read the items of an open popup menu. */
+const READ_POPUP_ITEMS = `(() => {
+  const items = [...document.querySelectorAll('[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"]')];
+  return items
+    .map((item) => ({ label: (item.innerText || item.getAttribute('aria-label') || '').replace(/\s+/gu, ' ').trim() }))
+    .filter((entry) => entry.label.length > 0);
+})()`;
+/** Close an open popup menu. */
+const CLOSE_POPUP = `(() => {
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  return true;
+})()`;
+/** Build the expression that clicks one popup item by label. */
+function selectPopupItemExpression(pattern) {
+    return `(() => {
+  const items = [...document.querySelectorAll('[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="option"]')];
+  const target = items.find((item) => new RegExp(${JSON.stringify(pattern)}, 'iu').test((item.innerText || item.getAttribute('aria-label') || '').replace(/\s+/gu, ' ').trim()));
+  if (!target) return { selected: false };
+  target.click();
+  return { selected: true };
+})()`;
+}
+/** Download one rendered image through the page session. */
+const DOWNLOAD_IMAGE = `(src) => (async () => {
+  const response = await fetch(src, { credentials: 'include' });
+  if (!response.ok) return { ok: false, reason: 'http-' + response.status };
+  const buffer = new Uint8Array(await response.arrayBuffer());
+  let binary = '';
+  const chunk = 0x8000;
+  for (let index = 0; index < buffer.length; index += chunk) {
+    binary += String.fromCharCode.apply(null, Array.from(buffer.subarray(index, index + chunk)));
+  }
+  return { ok: true, base64: btoa(binary), mimeType: response.headers.get('content-type') || '', size: buffer.length };
+})()`;
 /** Click the page-native "New chat" control. */
 const CLICK_NEW_CHAT = `(() => {
   const normalize = (value) => (value || '').replace(/\\s+/gu, ' ').trim();
@@ -317,25 +392,31 @@ class ChromeCdpSession {
         if (!version.product) {
             throw new ChromeCdpError("chrome_cdp_browser_unidentified", "Chrome access unavailable: the browser WebSocket did not identify a Chrome browser.");
         }
-        const { targetInfos } = await this.connection.send("Target.getTargets");
-        const pages = targetInfos ?? [];
-        const chatgpt = pages.filter((target) => target.type === "page" && isChatGptUrl(target.url));
         const wanted = this.options.targetId?.trim();
-        let target;
-        if (wanted) {
-            target = chatgpt.find((entry) => entry.targetId === wanted);
+        let target = await this.findChatGptTarget(wanted);
+        if (!target && !wanted) {
+            // No ChatGPT page is open: open exactly one, the way the BrowserClaw
+            // adapter does, and own it from then on.
+            const created = await this.connection.send("Target.createTarget", { url: `${CHATGPT_ORIGIN}/` });
+            const createdId = created.targetId;
+            if (typeof createdId !== "string" || createdId.length === 0) {
+                throw new ChromeCdpError("chrome_cdp_target_create_failed", "Chrome access unavailable: opening a ChatGPT page in this Chrome failed.");
+            }
+            await waitFor(async () => {
+                const found = await this.findChatGptTarget(createdId);
+                if (!found)
+                    return undefined;
+                target = found;
+                return found;
+            }, this.options.timeoutMs, "ChatGPT page");
             if (!target) {
-                throw new ChromeCdpError("chrome_cdp_target_not_found", `Chrome access unavailable: the requested ChatGPT page ${wanted} is not open in this Chrome.`);
+                throw new ChromeCdpError("chrome_cdp_target_create_failed", "Chrome access unavailable: the ChatGPT page that was opened did not finish loading.");
             }
         }
-        else {
-            if (chatgpt.length === 0) {
-                throw new ChromeCdpError("chrome_cdp_no_chatgpt_page", "Chrome access unavailable: no open ChatGPT page was found in this Chrome. Open https://chatgpt.com/ in the browser and try again.");
-            }
-            if (chatgpt.length > 1) {
-                throw new ChromeCdpError("chrome_cdp_ambiguous_chatgpt_page", `Chrome access unavailable: ${chatgpt.length} ChatGPT pages are open; close the extra ones or set CDP_CHAT_CHROME_TARGET_ID to the one page this driver owns.`);
-            }
-            target = chatgpt[0];
+        if (!target) {
+            throw new ChromeCdpError(wanted ? "chrome_cdp_target_not_found" : "chrome_cdp_no_chatgpt_page", wanted
+                ? `Chrome access unavailable: the requested ChatGPT page ${wanted} is not open in this Chrome.`
+                : "Chrome access unavailable: no open ChatGPT page was found in this Chrome.");
         }
         const attached = await this.connection.send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
         const sessionId = attached.sessionId;
@@ -344,6 +425,20 @@ class ChromeCdpSession {
         }
         this.sessionId = sessionId;
         this.page = { targetId: target.targetId, url: target.url };
+    }
+    /** Find one ChatGPT page target, optionally by exact target id. */
+    async findChatGptTarget(targetId) {
+        const { targetInfos } = await this.connection.send("Target.getTargets");
+        const pages = targetInfos ?? [];
+        const chatgpt = pages.filter((target) => target.type === "page" && isChatGptUrl(target.url));
+        if (targetId)
+            return chatgpt.find((entry) => entry.targetId === targetId);
+        if (chatgpt.length === 0)
+            return undefined;
+        if (chatgpt.length > 1) {
+            throw new ChromeCdpError("chrome_cdp_ambiguous_chatgpt_page", `Chrome access unavailable: ${chatgpt.length} ChatGPT pages are open; close the extra ones or set CDP_CHAT_CHROME_TARGET_ID to the one page this driver owns.`);
+        }
+        return chatgpt[0];
     }
     /** The browser WebSocket URL proven by the ownership check. */
     browserWsUrl() {
@@ -461,14 +556,31 @@ function toMessageRecord(unit, index, now) {
     const text = unit.text.trim();
     if (!text)
         return undefined;
+    const media = (unit.media ?? []).map((entry, mediaIndex) => ({
+        id: `chatgpt-image:${createHash("sha256").update(entry.src).digest("hex").slice(0, 24)}:${mediaIndex}`,
+        filename: mediaFilename(entry.src, entry.mimeType, mediaIndex),
+        mimeType: entry.mimeType || "application/octet-stream",
+        size: entry.size,
+    }));
     return {
         id: unit.messageId || `${unit.key || "turn"}:${index}`,
         role,
         text: truncateUtf8(text, MAX_RESULT_BYTES),
         version: 1,
         createdAt: new Date(now + index).toISOString(),
-        media: [],
+        media,
     };
+}
+/** Build a safe filename for one rendered image. */
+function mediaFilename(src, mimeType, index) {
+    const extension = mimeType.includes("png") ? "png" : mimeType.includes("jpeg") || mimeType.includes("jpg") ? "jpg" : mimeType.includes("webp") ? "webp" : "bin";
+    const name = src.split("/").pop()?.split("?")[0] ?? "";
+    const stem = name.replace(/\.[a-z0-9]+$/iu, "").replace(/[^A-Za-z0-9._-]/gu, "").slice(0, 64);
+    return stem ? `${stem}.${extension}` : `chatgpt-image-${index + 1}.${extension}`;
+}
+/** Escape a string for use inside a regular expression. */
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 /** Truncate a string to a UTF-8 byte limit. */
 function truncateUtf8(value, maxBytes) {
@@ -624,8 +736,108 @@ class ChromeCdpPage {
     async editMessage() {
         throw new ChromeCdpError("chrome_cdp_edit_unsupported", "The Chrome CDP driver does not implement edit_message.");
     }
-    async downloadMedia() {
-        throw new ChromeCdpError("chrome_cdp_download_unsupported", "The Chrome CDP driver does not implement download_media.");
+    async downloadMedia(input) {
+        const units = await this.readUnits();
+        const unit = units.find((entry) => entry.messageId === input.messageId || entry.key === input.messageId);
+        if (!unit) {
+            throw new ChromeCdpError("chrome_cdp_media_not_found", "The requested message is not visible on the owned page.");
+        }
+        const media = unit.media ?? [];
+        const index = media.findIndex((entry) => `chatgpt-image:${createHash("sha256").update(entry.src).digest("hex").slice(0, 24)}:0` === input.mediaId
+            || `chatgpt-image:${createHash("sha256").update(entry.src).digest("hex").slice(0, 24)}:${media.indexOf(entry)}` === input.mediaId);
+        if (index < 0) {
+            throw new ChromeCdpError("chrome_cdp_media_not_found", "The requested attachment is not bound to that message.");
+        }
+        const entry = media[index];
+        const result = await this.sessionProvider().evaluate(DOWNLOAD_IMAGE.replace("(src)", JSON.stringify(entry.src)));
+        if (!result?.ok || !result.base64) {
+            throw new ChromeCdpError("chrome_cdp_media_download_failed", `The rendered image could not be downloaded from the page${result?.reason ? `: ${result.reason}` : "."}`);
+        }
+        return {
+            bytes: Buffer.from(result.base64, "base64"),
+            filename: mediaFilename(entry.src, result.mimeType || entry.mimeType, index),
+            mimeType: result.mimeType || entry.mimeType || "application/octet-stream",
+        };
+    }
+    /** List the models the page's own model picker offers. */
+    async listModels() {
+        const opened = await waitFor(async () => {
+            const result = await this.sessionProvider().evaluate(OPEN_MODEL_MENU);
+            return result?.opened ? result : undefined;
+        }, 15_000, "model picker").catch(() => undefined);
+        if (!opened?.opened)
+            return [];
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        const items = await this.sessionProvider().evaluate(READ_POPUP_ITEMS);
+        await this.sessionProvider().evaluate(CLOSE_POPUP);
+        return [...new Set(items.map((entry) => entry.label).filter((label) => label.length > 0))].slice(0, 20);
+    }
+    /** Select one model in the page's own model picker. */
+    async changeModel(chatId, model) {
+        await this.openChatForSending(chatId);
+        // The picker appears with the composer, which can lag behind a navigation.
+        const opened = await waitFor(async () => {
+            const result = await this.sessionProvider().evaluate(OPEN_MODEL_MENU);
+            return result?.opened ? result : undefined;
+        }, 15_000, "model picker").catch(() => undefined);
+        if (!opened?.opened) {
+            return { ok: false, error: "The ChatGPT model picker was not found on the owned page." };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        const selected = await this.sessionProvider().evaluate(selectPopupItemExpression(escapeRegExp(model)));
+        await this.sessionProvider().evaluate(CLOSE_POPUP);
+        return selected?.selected
+            ? { ok: true }
+            : { ok: false, error: `The ChatGPT model picker does not offer '${model}'.` };
+    }
+    /** Run one page-native task in the disposable chat. */
+    async runTask(input) {
+        if (input.kind !== "draw") {
+            throw new ChromeCdpError("chrome_cdp_task_unsupported", `The Chrome CDP driver does not implement the '${input.kind}' control.`);
+        }
+        await this.openChatForSending(input.chatId);
+        const opened = await this.sessionProvider().evaluate(OPEN_TOOLS_MENU);
+        if (!opened?.opened) {
+            throw new ChromeCdpError("chrome_cdp_task_control_missing", "The ChatGPT tools menu was not found on the owned page.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        const items = await this.sessionProvider().evaluate(READ_POPUP_ITEMS);
+        const image = items.find((entry) => /(изображ|рисун|генерац|image|picture)/iu.test(entry.label));
+        if (!image) {
+            await this.sessionProvider().evaluate(CLOSE_POPUP);
+            throw new ChromeCdpError("chrome_cdp_task_control_missing", `ChatGPT does not offer image generation to this account. Available: ${items.map((entry) => entry.label).join(", ") || "none"}.`);
+        }
+        await this.sessionProvider().evaluate(selectPopupItemExpression(escapeRegExp(image.label)));
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        const marker = input.prompt.trim().slice(0, 40);
+        let sent;
+        for (let attempt = 0; attempt < 3 && !sent; attempt += 1) {
+            await this.sessionProvider().submitPrompt(input.prompt);
+            sent = await waitFor(async () => {
+                const units = await this.readUnits();
+                return [...units].reverse().find((entry) => entry.role === "user" && entry.text.includes(marker));
+            }, 4_000, "message").catch(() => undefined);
+        }
+        if (!sent) {
+            throw new ChromeCdpError("chrome_cdp_submit_failed", "The ChatGPT composer did not submit the image prompt.");
+        }
+        const generated = await waitFor(async () => {
+            const units = await this.readUnits();
+            return [...units].reverse().find((entry) => entry.role === "assistant" && (entry.media?.length ?? 0) > 0);
+        }, this.timeoutMs, "image");
+        return {
+            id: generated.messageId || `chrome-cdp-assistant:${randomUUID()}`,
+            role: "assistant",
+            text: generated.text,
+            version: 1,
+            createdAt: new Date().toISOString(),
+            media: (generated.media ?? []).map((entry, index) => ({
+                id: `chatgpt-image:${createHash("sha256").update(entry.src).digest("hex").slice(0, 24)}:${index}`,
+                filename: mediaFilename(entry.src, entry.mimeType, index),
+                mimeType: entry.mimeType || "application/octet-stream",
+                size: entry.size,
+            })),
+        };
     }
     /** Make the target chat the one shown by the owned page. */
     async openChatForSending(chatId) {

@@ -90,6 +90,21 @@ supported route is `--remote-debugging-port` with a non-default
 `--user-data-dir`. Both routes, the ownership proof and every refusal are
 documented in the [Chrome CDP driver guide](docs/CHROME-CDP.md).
 
+### As an Agent Herder harness
+
+`dist/herder-driver.js` exports `createCdpChatDriver()` for Agent Herder:
+
+```bash
+CDP_CHAT_DRIVER_MODULE=/absolute/path/to/chatgpt-cdp-mcp/dist/herder-driver.js
+```
+
+Agent Herder then registers its `chatgpt` harness on the same owned page: the
+chats of the page become Herder sessions, a session can be launched as a new
+disposable chat, a message can be sent to a session, the page's own model
+picker becomes `list_models`/`change_model`, and the durable cadence can wake
+one ChatGPT chat on a schedule. The harness needs the Herder process and the
+Chrome on the same machine.
+
 ## What it exposes
 
 | Tool | Purpose |
