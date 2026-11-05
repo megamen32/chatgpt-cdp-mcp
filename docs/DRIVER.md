@@ -148,3 +148,39 @@ export async function createCdpChatDriver() {
 
 Use the [mock driver](../examples/mock-driver.mjs) as a running reference and
 the exported declarations for the complete record shapes.
+
+
+## Chrome 144+ native owner-approved auto-connect (opt-in)
+
+When Chrome 136+ refuses ordinary remote debugging on the standard user
+data directory, do not bypass Chrome ownership checks by switching to
+another profile, copying cookies, or disabling ownership verification.
+
+The CDP driver also supports CDP_CHAT_CHROME_AUTO_CONNECT=1. This uses
+Puppeteer's Chrome-channel native discovery and waits for the Chrome owner's
+remote-debugging approval. It is disabled by default and cannot be combined
+with an explicit WebSocket URL or alternate profile. The returned browser
+endpoint must be a loopback WebSocket with the expected browser target path.
+A lost native debugging connection is treated as lost consent; no silent
+reconnection or retry occurs. The driver only attaches to an already open
+ChatGPT tab, refusing to open a new tab in an owner's browser.
+
+For a real deployment, the browser owner must perform these UI actions:
+
+1. In the intended running Chrome Stable instance, open
+   chrome://inspect/#remote-debugging and manually enable remote debugging.
+2. Configure CDP_CHAT_CHROME_AUTO_CONNECT=1 alongside
+   CDP_CHAT_DRIVER=chrome-cdp in the already approved local sidecar
+   context. Do not configure it in a broad network-facing proxy or supply
+   browser profile credentials to the UserIO container.
+3. When Chrome displays the native debugging connection dialog, review it
+   and explicitly choose Allow. Declining keeps the original UserIO
+   delivery_unknown and never triggers another send.
+
+This is a native user-granted browser debugging permission, not proof that a
+recipient read a message. The CDP send journal separately persists the
+original idempotency key and a positive page-observed message reference.
+No caller should claim delivery_confirmed from the browser observation.
+
+Source-only and mocked tests can exercise the opt-in connector and consent
+rejection paths without opening or modifying a real Chrome session.

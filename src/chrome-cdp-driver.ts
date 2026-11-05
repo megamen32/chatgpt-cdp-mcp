@@ -112,10 +112,36 @@ export interface ChromeCdpDriverOptions {
   readonly targetId?: string;
   /** Override the socket owner lookup. */
   readonly ownershipProbe?: SocketOwnerProbe;
+  /** Connect through Chrome 144+ user-confirmed native auto-connect. Opt-in. */
+  readonly autoConnect?: boolean;
+  /** Test-only injection of the user-approved native browser transport. */
+  readonly autoConnector?: () => Promise<ApprovedBrowserConnection>;
   /** Override the WebSocket client. */
   readonly webSocketFactory?: WebSocketFactory;
   /** Deadline for one browser operation. */
   readonly timeoutMs?: number;
+}
+
+/** A Chrome connection accepted by Chrome's native permission dialog. */
+export interface ApprovedBrowserConnection {
+  wsEndpoint(): string;
+  readonly connected: boolean;
+  disconnect(): void;
+}
+
+/** Only loopback Chrome CDP browser sockets from native consent are permitted. */
+export function validatedNativeBrowserEndpoint(value: string): string {
+  let parsed: URL;
+  try { parsed = new URL(value); }
+  catch { throw new ChromeCdpError("chrome_cdp_native_endpoint_invalid", "Chrome auto-connect did not return a valid endpoint."); }
+  if (parsed.protocol !== "ws:" ||
+      !["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname) ||
+      !parsed.port || parsed.username || parsed.password || parsed.search || parsed.hash ||
+      !/^\/devtools\/browser\/[A-Za-z0-9_-]{8,128}$/.test(parsed.pathname)) {
+    throw new ChromeCdpError("chrome_cdp_native_endpoint_invalid",
+      "Chrome auto-connect did not return a valid local browser endpoint.");
+  }
+  return parsed.toString();
 }
 
 /** A refusal raised by the Chrome CDP driver. */
@@ -501,7 +527,8 @@ class ChromeCdpSession {
   constructor(
     private readonly proof: ChromeOwnershipProof | undefined,
     private readonly explicitWsUrl: string | undefined,
-    private readonly options: { timeoutMs: number; webSocketFactory: WebSocketFactory; targetId?: string },
+    private readonly options: { timeoutMs: number; webSocketFactory: WebSocketFactory;
+      targetId?: string; nativeOwnerConnected?: () => boolean; requireExistingPage?: boolean },
   ) {
     this.connection = new CdpConnection(options.webSocketFactory);
   }
@@ -516,7 +543,7 @@ class ChromeCdpSession {
     }
     const wanted = this.options.targetId?.trim();
     let target = await this.findChatGptTarget(wanted);
-    if (!target && !wanted) {
+    if (!target && !wanted && !this.options.requireExistingPage) {
       // No ChatGPT page is open: open exactly one, the way the BrowserClaw
       // adapter does, and own it from then on.
       const created = await this.connection.send("Target.createTarget", { url: `${CHATGPT_ORIGIN}/` });
@@ -575,6 +602,10 @@ class ChromeCdpSession {
 
   /** Re-check that the proven endpoint is still the live Chrome endpoint. */
   async assertLease(): Promise<void> {
+    if (this.options.nativeOwnerConnected && !this.options.nativeOwnerConnected()) {
+      throw new ChromeCdpError("chrome_cdp_consent_lost",
+        "Chrome user-approved debugging session disconnected; another browser approval is required.");
+    }
     if (!this.proof) return;
     const current = await readDevToolsEndpoint(this.proof.profileDir);
     if (current.port !== this.proof.endpoint.port || current.browserTargetPath !== this.proof.endpoint.browserTargetPath) {
@@ -1065,19 +1096,61 @@ export async function createChromeCdpCdpChatDriver(
   const profileDir = options.profileDir ?? process.env.CDP_CHAT_CHROME_PROFILE_DIR?.trim() ?? defaultChromeProfileDir();
   const explicitWsUrl = options.browserWsUrl ?? process.env.CDP_CHAT_CHROME_BROWSER_WS_URL?.trim() ?? undefined;
   const targetId = options.targetId ?? process.env.CDP_CHAT_CHROME_TARGET_ID?.trim() ?? undefined;
+  // This is opt-in and always goes through Chrome's native user-consent gate.
+  // Do not quietly fall back to the stale DevToolsActivePort or a different
+  // browser profile after the owner refuses or disconnects.
+  const autoConnect = options.autoConnect ?? process.env.CDP_CHAT_CHROME_AUTO_CONNECT === "1";
+  if (autoConnect && (explicitWsUrl || options.requireOwnership === false
+    || (options.profileDir && profileDir !== defaultChromeProfileDir())
+    || (process.env.CDP_CHAT_CHROME_PROFILE_DIR?.trim() &&
+        profileDir !== defaultChromeProfileDir()))) {
+    throw new ChromeCdpError("chrome_cdp_auto_connect_conflict",
+      "Native user-approved Chrome connection cannot be combined with an explicit browser endpoint or another profile.");
+  }
+  let approvedBrowser: ApprovedBrowserConnection | undefined;
+  const nativeConnector = options.autoConnector ?? (async (): Promise<ApprovedBrowserConnection> => {
+    const { default: puppeteer } = await import("puppeteer-core");
+    const browser = await puppeteer.connect({ channel: "chrome", defaultViewport: null,
+      protocolTimeout: timeoutMs });
+    return browser;
+  });
   let session: ChromeCdpSession | undefined;
   const openSession = async (): Promise<ChromeCdpSession> => {
     if (!session) {
-      let proof: ChromeOwnershipProof | undefined;
-      if (explicitWsUrl) {
-        if (options.requireOwnership !== false) {
-          proof = await proveChromeOwnership({ profileDir, probe: options.ownershipProbe });
+      if (autoConnect) {
+        try {
+          // connect() does not resolve until Chrome's owner explicitly allows
+          // the native M144+ remote-debugging prompt.
+          approvedBrowser = await nativeConnector();
+          if (!approvedBrowser.connected) {
+            throw new ChromeCdpError("chrome_cdp_consent_lost",
+              "Chrome debugging permission was revoked before a browser could be attached.");
+          }
+          const endpoint = validatedNativeBrowserEndpoint(approvedBrowser.wsEndpoint());
+          session = new ChromeCdpSession(undefined, endpoint, {
+            timeoutMs, webSocketFactory, targetId, requireExistingPage: true,
+            nativeOwnerConnected: () => Boolean(approvedBrowser?.connected),
+          });
+          await session.open();
+        } catch (error) {
+          session?.close(); session = undefined;
+          approvedBrowser?.disconnect(); approvedBrowser = undefined;
+          if (error instanceof ChromeCdpError) throw error;
+          throw new ChromeCdpError("chrome_cdp_auto_connect_denied",
+            "Chrome did not approve native debugging. Enable it in chrome://inspect/#remote-debugging and explicitly allow the request.");
         }
       } else {
-        proof = await proveChromeOwnership({ profileDir, probe: options.ownershipProbe });
+        let proof: ChromeOwnershipProof | undefined;
+        if (explicitWsUrl) {
+          if (options.requireOwnership !== false) {
+            proof = await proveChromeOwnership({ profileDir, probe: options.ownershipProbe });
+          }
+        } else {
+          proof = await proveChromeOwnership({ profileDir, probe: options.ownershipProbe });
+        }
+        session = new ChromeCdpSession(proof, explicitWsUrl, { timeoutMs, webSocketFactory, targetId });
+        await session.open();
       }
-      session = new ChromeCdpSession(proof, explicitWsUrl, { timeoutMs, webSocketFactory, targetId });
-      await session.open();
     } else {
       await session.assertLease();
     }
@@ -1095,7 +1168,8 @@ export async function createChromeCdpCdpChatDriver(
     },
     /** Close the browser WebSocket held by this driver. */
     close(): void {
-      session?.close();
+      session?.close(); session = undefined;
+      approvedBrowser?.disconnect(); approvedBrowser = undefined;
     },
   };
 }
