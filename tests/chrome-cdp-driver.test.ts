@@ -14,6 +14,7 @@ import { WebSocketServer } from "ws";
 import {
   CHROME_CDP_CHAT_CAPABILITIES,
   createChromeCdpCdpChatDriver,
+  validatedNativeBrowserEndpoint,
   isChatGptUrl,
   conversationIdFromUrl,
 } from "../src/chrome-cdp-driver.js";
@@ -450,5 +451,98 @@ describe("chrome-cdp driver", () => {
     expect(isChatGptUrl("https://example.com/c/abc")).toBe(false);
     expect(conversationIdFromUrl("https://chatgpt.com/c/6ad7397c-3824-83ed-aa2c-103a12869fd5")).toBe(CHAT_ID);
     expect(conversationIdFromUrl("https://chatgpt.com/")).toBeUndefined();
+  });
+});
+
+
+describe("Chrome 144+ native owner-approved auto-connect", () => {
+  it("accepts only loopback browser WS identities as native proof", () => {
+    expect(validatedNativeBrowserEndpoint(
+      "ws://127.0.0.1:9222/devtools/browser/fixture123")).toContain("/devtools/browser/fixture123");
+    for (const wrong of [
+      "ws://evil.example:9222/devtools/browser/fixture123",
+      "wss://127.0.0.1:9222/devtools/browser/fixture123",
+      "ws://127.0.0.1:9222/not-browser/fixture123",
+      "ws://evil@127.0.0.1:9222/devtools/browser/fixture123",
+      "ws://127.0.0.1:9222/devtools/browser/fixture123?token=secret",
+    ]) {
+      expect(() => validatedNativeBrowserEndpoint(wrong)).toThrow(/browser endpoint/);
+    }
+  });
+
+  it("only connects after owner-approved native connector resolves", async () => {
+    const scripted = await startScriptedBrowser();
+    let calls=0, disconnections=0;
+    const approved={
+      connected:true, wsEndpoint:()=>scripted.url,
+      disconnect:()=>{disconnections++;},
+    };
+    const driver = await createChromeCdpCdpChatDriver({
+      autoConnect:true,
+      autoConnector:async()=>{calls++;return approved;},
+      ownershipProbe:async()=>{throw Error("stale legacy proof must not run");},
+      timeoutMs:2500,
+    });
+    const page=await driver.acquirePage();
+    const data=await page.snapshot();
+    expect(data.chats.map(x=>x.id)).toContain(CHAT_ID);
+    expect(calls).toBe(1);
+    expect(scripted.browser.navigated).toEqual([]);
+    driver.close();
+    expect(disconnections).toBe(1);
+  });
+
+  it("never falls back to stale DevToolsActivePort after consent denial", async () => {
+    let claimed=0;
+    const driver = await createChromeCdpCdpChatDriver({
+      autoConnect:true,
+      autoConnector:async()=>{throw Error("Chrome owner declined");},
+      ownershipProbe:async()=>{claimed++;throw Error("legacy should not run");},
+    });
+    await expect(driver.acquirePage()).rejects.toMatchObject({
+      reason:"chrome_cdp_auto_connect_denied",
+    });
+    expect(claimed).toBe(0);
+  });
+
+  it("revoked owner permission stops another read without reconnecting", async () => {
+    const scripted = await startScriptedBrowser();
+    let requests=0;
+    const browser={ connected:true,wsEndpoint:()=>scripted.url,disconnect:()=>{} };
+    const driver=await createChromeCdpCdpChatDriver({
+      autoConnect:true,autoConnector:async()=>{requests++;return browser;},timeoutMs:2500,
+    });
+    await driver.acquirePage();
+    browser.connected=false;
+    await expect(driver.acquirePage()).rejects.toMatchObject({reason:"chrome_cdp_consent_lost"});
+    expect(requests).toBe(1);
+    driver.close();
+  });
+
+  it("does not create a ChatGPT tab in somebody's existing Chrome session", async () => {
+    const scripted=await startScriptedBrowser({
+      targets:[{targetId:"unrelated",type:"page",url:"https://example.com/"}],
+    });
+    let disconnected=false;
+    const browser={connected:true,wsEndpoint:()=>scripted.url,disconnect:()=>{disconnected=true;}};
+    const driver=await createChromeCdpCdpChatDriver({
+      autoConnect:true,autoConnector:async()=>browser,timeoutMs:2500,
+    });
+    await expect(driver.acquirePage()).rejects.toMatchObject({reason:"chrome_cdp_no_chatgpt_page"});
+    expect(disconnected).toBe(true);
+    expect(scripted.browser.targets).toHaveLength(1);
+    expect(scripted.browser.navigated).toEqual([]);
+  });
+
+  it("does not combine native consent with identity override or another profile", async () => {
+    await expect(createChromeCdpCdpChatDriver({
+      autoConnect:true,browserWsUrl:"ws://127.0.0.1:9222/devtools/browser/fixture123",
+    })).rejects.toMatchObject({reason:"chrome_cdp_auto_connect_conflict"});
+    await expect(createChromeCdpCdpChatDriver({
+      autoConnect:true,requireOwnership:false,
+    })).rejects.toMatchObject({reason:"chrome_cdp_auto_connect_conflict"});
+    await expect(createChromeCdpCdpChatDriver({
+      autoConnect:true,profileDir:"/tmp/foreign-chrome",
+    })).rejects.toMatchObject({reason:"chrome_cdp_auto_connect_conflict"});
   });
 });

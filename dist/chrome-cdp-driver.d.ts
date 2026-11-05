@@ -55,11 +55,23 @@ export interface ChromeCdpDriverOptions {
     readonly targetId?: string;
     /** Override the socket owner lookup. */
     readonly ownershipProbe?: SocketOwnerProbe;
+    /** Connect through Chrome 144+ user-confirmed native auto-connect. Opt-in. */
+    readonly autoConnect?: boolean;
+    /** Test-only injection of the user-approved native browser transport. */
+    readonly autoConnector?: () => Promise<ApprovedBrowserConnection>;
     /** Override the WebSocket client. */
     readonly webSocketFactory?: WebSocketFactory;
     /** Deadline for one browser operation. */
     readonly timeoutMs?: number;
 }
+/** A Chrome connection accepted by Chrome's native permission dialog. */
+export interface ApprovedBrowserConnection {
+    wsEndpoint(): string;
+    readonly connected: boolean;
+    disconnect(): void;
+}
+/** Only loopback Chrome CDP browser sockets from native consent are permitted. */
+export declare function validatedNativeBrowserEndpoint(value: string): string;
 /** A refusal raised by the Chrome CDP driver. */
 export declare class ChromeCdpError extends Error {
     readonly reason: string;
