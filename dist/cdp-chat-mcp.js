@@ -4,7 +4,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve, join } from "node:path";
+import { homedir } from "node:os";
 import { CdpChatClient, ALL_CDP_CHAT_CAPABILITIES, } from "./cdp-chat.js";
 /** Return an MCP text result containing only bounded JSON data. */
 function textResult(value) {
@@ -42,6 +43,14 @@ export function registerCdpChatTools(server, client, capabilities = ALL_CDP_CHAT
             confirmation: z.literal("SEND_MESSAGE"),
             idempotencyKey: z.string().min(1).max(128),
         }, async (args) => textResult(await client.sendMessage(args)));
+    // Unlike export_chat, this reads a durable original idempotency receipt,
+    // not message text or an optimistic DOM match. Never issues another send.
+    if (capabilities.send_message)
+        server.tool("get_send_status", "Read the persisted status of the original send by idempotency key and exact payload. No browser action or retry.", {
+            chatRef: z.string().min(1).max(256),
+            text: z.string().min(1).max(100_000),
+            idempotencyKey: z.string().min(1).max(128),
+        }, async (args) => textResult(client.getSendStatus(args)));
     if (capabilities.edit_message)
         server.tool("edit_message", "Edit one fixture message only with exact confirmation EDIT_MESSAGE, one-shot idempotency, and an expected version or old-text guard.", {
             chatRef: z.string().min(1).max(256),
@@ -120,6 +129,10 @@ export async function main() {
     const driver = await loadCdpChatDriver();
     const server = createCdpChatServer(driver, {
         mediaRoot: process.env.CDP_CHAT_MEDIA_ROOT,
+        // The actual MCP process always keeps an original-send journal on disk.
+        // Tests and embedded custom clients can supply their own private path.
+        sendJournalPath: process.env.CDP_CHAT_SEND_JOURNAL_PATH ||
+            join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "chatgpt-cdp-mcp", "send-ledger.json"),
     });
     await server.connect(new StdioServerTransport());
     console.error("[cdp-website-chat] MCP server running on stdio");

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { OriginalSendJournal } from "./send-journal.js";
 import { mkdir, lstat, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 export const ALL_CDP_CHAT_CAPABILITIES = {
@@ -217,6 +218,7 @@ export class CdpChatClient {
     messageRefs = new Map();
     mediaRefs = new Map();
     gates = new Map();
+    sendJournal;
     boundIdentity;
     fixture;
     newChatInFlight = false;
@@ -234,6 +236,8 @@ export class CdpChatClient {
         if (this.options.recentWindowMs < 1 || this.options.maxExportBytes < 256 || this.options.maxMediaBytes < 1 || this.options.writeGateTtlMs < 1) {
             throw new CdpChatError("invalid_options", "bounds and TTL must be positive; maxExportBytes must be at least 256");
         }
+        if (options.sendJournalPath)
+            this.sendJournal = new OriginalSendJournal(options.sendJournalPath);
     }
     /** Create and bind exactly one disposable fixture chat without submitting a prompt. */
     async newChat(input) {
@@ -331,7 +335,7 @@ export class CdpChatClient {
             return { chatRef: input.chatRef, format: input.format, content: bounded.content, messages: bounded.messages, truncated: bounded.truncated };
         });
     }
-    /** Send exactly one message to a page-visible chat after consuming an exact one-shot gate. */
+    /** Send at most once. Persist original request before the browser mutation. */
     async sendMessage(input) {
         if (!input.text.trim())
             throw new CdpChatError("invalid_message", "text must contain at least one non-space character");
@@ -339,12 +343,33 @@ export class CdpChatClient {
         if (input.confirmation !== "SEND_MESSAGE")
             throw new CdpChatError("confirmation_required", "send_message requires confirmation SEND_MESSAGE");
         this.consumeGate("send_message", key, { chatRef: input.chatRef, text: input.text });
-        return this.withPage("send_message", async (page, pageIdentity) => {
-            const rawChatId = this.resolveChat(input.chatRef, pageIdentity, false);
-            const message = await page.sendMessage({ chatId: rawChatId, text: input.text });
-            const publicMessage = this.exportedMessage(rawChatId, message, pageIdentity);
-            return { chatRef: input.chatRef, messageRef: publicMessage.messageRef, message: publicMessage };
-        });
+        this.sendJournal?.prepare(key, input.chatRef, input.text);
+        try {
+            const result = await this.withPage("send_message", async (page, pageIdentity) => {
+                const rawChatId = this.resolveChat(input.chatRef, pageIdentity, false);
+                const message = await page.sendMessage({ chatId: rawChatId, text: input.text });
+                const publicMessage = this.exportedMessage(rawChatId, message, pageIdentity);
+                return { chatRef: input.chatRef, messageRef: publicMessage.messageRef, message: publicMessage };
+            });
+            // The provider acknowledgment is durable before the JSON-RPC response.
+            this.sendJournal?.markSent(key, result.messageRef);
+            return result;
+        }
+        catch (error) {
+            // Never replay a submitted original operation after an unknown response.
+            this.sendJournal?.markUnknown(key);
+            throw error;
+        }
+    }
+    /** Read-only status of the exact original CDP send. */
+    getSendStatus(input) {
+        if (!input.chatRef || !input.idempotencyKey || !input.text) {
+            throw new CdpChatError("invalid_original_send", "original idempotency key, chatRef and text required");
+        }
+        if (!this.sendJournal)
+            return { state: "unavailable", chatRef: input.chatRef,
+                idempotencyKey: input.idempotencyKey, recipientDeliveryConfirmed: false };
+        return this.sendJournal.read(input.idempotencyKey, input.chatRef, input.text);
     }
     /** Edit exactly one fixture message with an expected version or old-text guard. */
     async editMessage(input) {

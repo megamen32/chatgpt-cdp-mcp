@@ -165,6 +165,7 @@ describe("bundled BrowserClaw driver", () => {
       expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual([
         "download_media",
         "draw",
+        "get_send_status",
         "new_chat",
         "research",
         "search",

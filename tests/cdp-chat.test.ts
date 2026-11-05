@@ -293,6 +293,42 @@ describe("standalone CDP website chat MCP", () => {
     expect(page.editCalls).toBe(1);
   });
 
+  it("persists one original sent receipt before answering and recovers it without a resend", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cdp-send-journal-fixture-"));
+    roots.push(directory);
+    const sendJournalPath = join(directory, "original-send.json");
+    const {client, page, fixture} = await createFixture({sendJournalPath});
+    const input={chatRef:fixture.chatRef,text:"approved original",
+      confirmation:"SEND_MESSAGE",idempotencyKey:"original-1"};
+    const result=await client.sendMessage(input);
+    expect(page.sendCalls).toBe(1);
+    const afterRestart=new CdpChatClient(driverFor(page),{sendJournalPath});
+    expect(afterRestart.getSendStatus(input)).toMatchObject({
+      state:"sent",messageRef:result.messageRef,evidence:"page_observed",
+      recipientDeliveryConfirmed:false,
+    });
+    await expect(afterRestart.sendMessage(input)).rejects.toThrow(/already_submitted/);
+    expect(page.sendCalls).toBe(1);
+    expect(()=>afterRestart.getSendStatus({...input,text:"foreign"})).toThrow(/idempotency_conflict/);
+  });
+
+  it("keeps a lost browser outcome UNKNOWN without ever calling the provider twice", async () => {
+    const directory=await mkdtemp(join(tmpdir(), "cdp-lost-send-"));
+    roots.push(directory);
+    const sendJournalPath=join(directory,"original-send.json");
+    const {client,page,fixture}=await createFixture({sendJournalPath});
+    const original=page.sendMessage.bind(page);
+    page.sendMessage=async input=>{page.sendCalls++;throw new Error("synthetic lost response");};
+    const input={chatRef:fixture.chatRef,text:"unsafe unknown",
+      confirmation:"SEND_MESSAGE",idempotencyKey:"original-2"};
+    await expect(client.sendMessage(input)).rejects.toThrow(/synthetic lost response/);
+    const restored=new CdpChatClient(driverFor(page),{sendJournalPath});
+    expect(restored.getSendStatus(input).state).toBe("unknown");
+    await expect(restored.sendMessage(input)).rejects.toThrow(/already_submitted/);
+    expect(page.sendCalls).toBe(1);
+    page.sendMessage=original;
+  });
+
   it("projects write results without exposing raw page message or media IDs", async () => {
     const { client, fixture, exported } = await createFixture();
     const fixtureMessage = exported.messages[0];

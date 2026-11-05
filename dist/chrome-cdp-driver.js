@@ -718,20 +718,27 @@ class ChromeCdpPage {
         if (!state.hasComposer) {
             throw new ChromeCdpError("chrome_cdp_composer_missing", "The ChatGPT composer was not found on the owned page.");
         }
-        // The page restores its own composer draft and can overwrite the text
-        // between the insertion and the submit, so the send is verified and
-        // repeated until the message really appears.
-        const marker = input.text.trim().slice(0, 40);
-        let sent;
-        for (let attempt = 0; attempt < 3 && !sent; attempt += 1) {
-            await this.sessionProvider().submitPrompt(input.text);
-            sent = await waitFor(async () => {
-                const units = await this.readUnits();
-                return [...units].reverse().find((entry) => entry.role === "user" && entry.text.includes(marker));
-            }, 4_000, "message").catch(() => undefined);
-        }
+        // Exactly one provider submission. An unobserved outcome is UNKNOWN, never
+        // permission to press Send again (even when the composer can race its draft).
+        const before = await this.readUnits();
+        const originalText = input.text.trim();
+        const knownKeys = new Set(before.filter((entry) => entry.role === "user")
+            .map((entry) => entry.messageId || entry.key).filter(Boolean));
+        const priorMatching = before.filter((entry) => entry.role === "user"
+            && entry.text.trim() === originalText).length;
+        await this.sessionProvider().submitPrompt(input.text);
+        const sent = await waitFor(async () => {
+            const units = await this.readUnits();
+            const matches = units.filter((entry) => entry.role === "user"
+                && entry.text.trim() === originalText);
+            const newKey = matches.find((entry) => {
+                const id = entry.messageId || entry.key;
+                return !!id && !knownKeys.has(id);
+            });
+            return newKey || (matches.length > priorMatching ? matches.at(-1) : undefined);
+        }, 12_000, "message").catch(() => undefined);
         if (!sent) {
-            throw new ChromeCdpError("chrome_cdp_submit_failed", "The ChatGPT composer did not submit the message.");
+            throw new ChromeCdpError("chrome_cdp_submit_unknown", "The single ChatGPT send was not confirmed by a new page message; never retry the original operation.");
         }
         const message = {
             id: sent.messageId || `chrome-cdp-user:${randomUUID()}`,
