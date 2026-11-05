@@ -79,6 +79,7 @@ describe("standalone MCP server", () => {
       "draw",
       "edit_message",
       "export_chat",
+      "get_send_status",
       "list_chats",
       "new_chat",
       "research",

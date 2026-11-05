@@ -1,3 +1,4 @@
+import { type OriginalSendStatus } from "./send-journal.js";
 export type ChatView = "unread" | "working" | "recent";
 export type ChatTaskKind = "research" | "search" | "draw";
 export type CdpChatOperation = "new_chat" | "list_chats" | "search_chat" | "export_chat" | "send_message" | "edit_message" | "download_media" | ChatTaskKind;
@@ -85,6 +86,7 @@ export interface CdpChatOptions {
     maxMediaBytes?: number;
     allowedMediaTypes?: ReadonlySet<string>;
     writeGateTtlMs?: number;
+    sendJournalPath?: string;
     now?: () => number;
 }
 export interface NewChatInput {
@@ -230,6 +232,7 @@ export declare class CdpChatClient {
     private readonly messageRefs;
     private readonly mediaRefs;
     private readonly gates;
+    private readonly sendJournal?;
     private boundIdentity?;
     private fixture?;
     private newChatInFlight;
@@ -244,8 +247,10 @@ export declare class CdpChatClient {
     searchChat(input: SearchChatInput): Promise<SearchChatResult>;
     /** Export a page-visible chat with message and byte limits. */
     exportChat(input: ExportChatInput): Promise<ExportChatResult>;
-    /** Send exactly one message to a page-visible chat after consuming an exact one-shot gate. */
+    /** Send at most once. Persist original request before the browser mutation. */
     sendMessage(input: SendMessageInput): Promise<SendMessageResult>;
+    /** Read-only status of the exact original CDP send. */
+    getSendStatus(input: Pick<SendMessageInput, "chatRef" | "text" | "idempotencyKey">): OriginalSendStatus;
     /** Edit exactly one fixture message with an expected version or old-text guard. */
     editMessage(input: EditMessageInput): Promise<EditMessageResult>;
     /** Download one fixture attachment under a confined root and MIME/size allowlist. */

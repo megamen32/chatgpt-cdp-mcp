@@ -68,9 +68,25 @@ Exports one page-visible chat. Output defaults to 50 messages and is capped at
 }
 ```
 
-Targets one page-visible chat. The confirmation and idempotency key are
-one-shot; the key is tied to the exact payload and expires after 60 seconds by
-default.
+Targets one page-visible chat. A short-lived gate prevents a duplicate
+submission within a single process. In the executable MCP server, the
+idempotencyKey, chatRef and SHA-256 of exact text are durably recorded
+**before** its single browser submission. After UNKNOWN or restart, the
+original key cannot submit again. The journal stores no message bodies.
+
+## get_send_status
+
+Read-only lookup of the original send requires chatRef, text and
+idempotencyKey. It returns state=sent with the original opaque messageRef
+and evidence=page_observed only after a positive page observation and fsynced
+receipt. recipientDeliveryConfirmed is always false: this is **not** evidence
+that anyone read the message. UNKNOWN, not_found and unavailable never allow
+a retry. It does not invoke the browser or send any message.
+
+The executable MCP uses private storage under
+XDG_STATE_HOME/chatgpt-cdp-mcp/send-ledger.json (defaults to
+~/.local/state) or CDP_CHAT_SEND_JOURNAL_PATH. An embedded client can
+omit sendJournalPath, in which case the lookup returns unavailable.
 
 ## `edit_message`
 

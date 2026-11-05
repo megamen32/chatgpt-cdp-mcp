@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { OriginalSendJournal, type OriginalSendStatus } from "./send-journal.js";
 import { mkdir, lstat, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -106,6 +107,7 @@ export interface CdpChatOptions {
   maxMediaBytes?: number;
   allowedMediaTypes?: ReadonlySet<string>;
   writeGateTtlMs?: number;
+  sendJournalPath?: string;
   now?: () => number;
 }
 
@@ -291,7 +293,7 @@ const DEFAULT_ALLOWED_MEDIA_TYPES = new Set([
   "text/plain",
 ]);
 
-const DEFAULT_OPTIONS: Required<Omit<CdpChatOptions, "allowedMediaTypes" | "now">> = {
+const DEFAULT_OPTIONS: Required<Omit<CdpChatOptions, "allowedMediaTypes" | "now" | "sendJournalPath">> = {
   mediaRoot: resolve(process.cwd(), "cdp-chat-media"),
   recentWindowMs: 7 * 24 * 60 * 60 * 1000,
   maxExportBytes: 64 * 1024,
@@ -477,12 +479,13 @@ async function confinedDirectory(rootInput: string, requested: string | undefine
 
 /** Standalone browser-chat adapter with fixture and page-lease safety. */
 export class CdpChatClient {
-  private readonly options: Required<Omit<CdpChatOptions, "allowedMediaTypes" | "now">> & { allowedMediaTypes: ReadonlySet<string>; now: () => number };
+  private readonly options: Required<Omit<CdpChatOptions, "allowedMediaTypes" | "now" | "sendJournalPath">> & { allowedMediaTypes: ReadonlySet<string>; now: () => number };
   private readonly refs = new Map<string, RefBinding>();
   private readonly chatRefs = new Map<string, string>();
   private readonly messageRefs = new Map<string, string>();
   private readonly mediaRefs = new Map<string, string>();
   private readonly gates = new Map<string, GateRecord>();
+  private readonly sendJournal?: OriginalSendJournal;
   private boundIdentity?: PageIdentity;
   private fixture?: FixtureBinding;
   private newChatInFlight = false;
@@ -500,6 +503,7 @@ export class CdpChatClient {
     if (this.options.recentWindowMs < 1 || this.options.maxExportBytes < 256 || this.options.maxMediaBytes < 1 || this.options.writeGateTtlMs < 1) {
       throw new CdpChatError("invalid_options", "bounds and TTL must be positive; maxExportBytes must be at least 256");
     }
+    if (options.sendJournalPath) this.sendJournal = new OriginalSendJournal(options.sendJournalPath);
   }
 
   /** Create and bind exactly one disposable fixture chat without submitting a prompt. */
@@ -591,18 +595,38 @@ export class CdpChatClient {
     });
   }
 
-  /** Send exactly one message to a page-visible chat after consuming an exact one-shot gate. */
+  /** Send at most once. Persist original request before the browser mutation. */
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
     if (!input.text.trim()) throw new CdpChatError("invalid_message", "text must contain at least one non-space character");
     const key = requireOpaque(input.idempotencyKey, "idempotencyKey");
     if (input.confirmation !== "SEND_MESSAGE") throw new CdpChatError("confirmation_required", "send_message requires confirmation SEND_MESSAGE");
     this.consumeGate("send_message", key, { chatRef: input.chatRef, text: input.text });
-    return this.withPage("send_message", async (page, pageIdentity) => {
-      const rawChatId = this.resolveChat(input.chatRef, pageIdentity, false);
-      const message = await page.sendMessage({ chatId: rawChatId, text: input.text });
-      const publicMessage = this.exportedMessage(rawChatId, message, pageIdentity);
-      return { chatRef: input.chatRef, messageRef: publicMessage.messageRef, message: publicMessage };
-    });
+    this.sendJournal?.prepare(key, input.chatRef, input.text);
+    try {
+      const result = await this.withPage("send_message", async (page, pageIdentity) => {
+        const rawChatId = this.resolveChat(input.chatRef, pageIdentity, false);
+        const message = await page.sendMessage({ chatId: rawChatId, text: input.text });
+        const publicMessage = this.exportedMessage(rawChatId, message, pageIdentity);
+        return { chatRef: input.chatRef, messageRef: publicMessage.messageRef, message: publicMessage };
+      });
+      // The provider acknowledgment is durable before the JSON-RPC response.
+      this.sendJournal?.markSent(key, result.messageRef);
+      return result;
+    } catch (error) {
+      // Never replay a submitted original operation after an unknown response.
+      this.sendJournal?.markUnknown(key);
+      throw error;
+    }
+  }
+
+  /** Read-only status of the exact original CDP send. */
+  getSendStatus(input: Pick<SendMessageInput, "chatRef" | "text" | "idempotencyKey">): OriginalSendStatus {
+    if (!input.chatRef || !input.idempotencyKey || !input.text) {
+      throw new CdpChatError("invalid_original_send", "original idempotency key, chatRef and text required");
+    }
+    if (!this.sendJournal) return { state: "unavailable", chatRef: input.chatRef,
+      idempotencyKey: input.idempotencyKey, recipientDeliveryConfirmed: false };
+    return this.sendJournal.read(input.idempotencyKey, input.chatRef, input.text);
   }
 
   /** Edit exactly one fixture message with an expected version or old-text guard. */

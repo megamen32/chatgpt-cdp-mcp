@@ -370,7 +370,7 @@ describe("chrome-cdp driver", () => {
     expect(scripted.browser.units).toEqual([]);
   });
 
-  it("repeats the send when the page does not submit the message", async () => {
+  it("never retries a send whose outcome is not confirmed by the page", async () => {
     const profileDir = await createProfile("9222\n/devtools/browser/abc\n");
     const scripted = await startScriptedBrowser({ droppedSubmits: 1 });
     const driver = await createChromeCdpCdpChatDriver({
@@ -380,12 +380,15 @@ describe("chrome-cdp driver", () => {
       timeoutMs: 20000,
     });
     const page = await driver.acquirePage();
-    const created = await page.createChat({ title: "Retry chat" });
-    const message = await page.sendMessage({ chatId: created.id, text: "повтор отправки" });
-    expect(message.role).toBe("user");
-    expect(message.text).toBe("повтор отправки");
-    expect(scripted.browser.units.some((unit) => unit.text.includes("повтор отправки"))).toBe(true);
-  });
+    const created = await page.createChat({ title: "Uncertain send chat" });
+    await expect(page.sendMessage({ chatId: created.id, text: "synthetic lost response" }))
+      .rejects.toMatchObject({reason: "chrome_cdp_submit_unknown"});
+    // The fixture drops the one attempted submission, so no accepted Enter
+    // may be observed. A forbidden second attempt would create a message.
+    expect(scripted.browser.enterPresses).toBe(0);
+    expect(scripted.browser.droppedSubmits).toBe(0);
+    expect(scripted.browser.units.some((unit) => unit.text.includes("synthetic lost response"))).toBe(false);
+  }, 18000);
 
   it("opens exactly one ChatGPT page when none is open", async () => {
     const profileDir = await createProfile("9222\n/devtools/browser/abc\n");
